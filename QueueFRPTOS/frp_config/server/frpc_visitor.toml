@@ -1,0 +1,13 @@
+serverAddr = "127.0.0.1"# visitor 与 frps 在同一台机器，用 localhost
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_VISITOR_AUTH_TOKEN }}" # 与 frps.toml 一致
+
+[[visitors]]
+name = "gpu_visitor"
+type = "stcp"  # 是 stcp，与 worker 的 type 一致
+serverName = "gpu_worker"  # 与 worker 的 name 一致
+secretKey = "{{ .Envs.FRP_WORKER_SECRET_KEY }}"  # 与 worker 的 secretKey 一致
+bindAddr = "127.0.0.1"
+bindPort = 6000 #这是 Go 程序访问的端口，main.go 中的 workerAddr

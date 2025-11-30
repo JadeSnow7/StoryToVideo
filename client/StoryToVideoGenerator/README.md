@@ -1,60 +1,76 @@
-# 📽️ 故事到视频生成器 (Story-to-Video Generator)
+# 📝 StoryToVideo Generator 项目技术文档
 
-这是一个基于 Qt C++ 和 QML 的练手项目，旨在实现一个完整的“故事到视频”内容生成链路。项目通过 LLM（Ollama）生成分镜描述，通过 Stable Diffusion (SD Turbo) 生成关键帧图像，并最终合成视频。
+## 1. 项目概览与架构
 
-## ✨ 核心功能与技术栈
+本项目目标是开发一个桌面应用，实现从文本故事到视频内容的生成。核心在于解决 LLM/图像生成等耗时任务带来的前端阻塞问题，采用 **MVVM 架构** 和 **异步任务轮询机制** 实现前后端解耦。
 
-本项目兼容 **Qt 5.8 / MinGW 32-bit** 环境，并实现了与外部 AI 服务的异步通信。
+* **客户端框架：** C++ (Qt 5.8) 和 QML。
+* **服务端 API 地址：** `http://119.45.124.222:8080/v1/api/...`。
+* **任务管理：** 异步任务 (Task) + `QTimer` 轮询。
 
-| 模块 | 技术栈 / API | 状态 | 职责 |
-| :--- | :--- | :--- | :--- |
-| **前端 UI** | Qt QML (兼容 5.8 / Controls 2.1) | ✅ 完成 | 提供五大页面和交互逻辑。 |
-| **LLM 集成** | C++ Qt Network / Ollama (Qwen2.5) | ✅ 完成 | 异步调用 LLM API，生成并解析流式 JSON 分镜。 |
-| **图像生成** | C++ Qt Network / SD Turbo (REST API) | ✅ 完成 | Base64 解码并保存关键帧图像到本地。 |
-| **核心逻辑** | C++ ViewModel | ✅ 完成 | 统一状态管理、QML/C++ 双向通信。 |
-| **视频处理** | FFmpeg / OpenGL | ⏳ 待实现 | 负责最终的视频合成和转场效果。 |
+### 1.1 架构分层
 
----
-
-## 🏗️ 项目架构分层
-
-项目采用标准的 Qt C++/QML 架构，确保前后端分离：
-
-### I. C++ 后端层 (Business Logic)
-
-| 文件名 | 职责说明 | 关键功能 |
+| 模块 | 文件 | 职责 |
 | :--- | :--- | :--- |
-| `ViewModel.h/cpp` | **状态与逻辑核心。** | 暴露供 QML 调用的函数 (`Q_INVOKABLE`)；解析 LLM JSON；协调网络请求。 |
-| `NetworkManager.h/cpp`| **网络通信层。** | 封装 Ollama 和 Stable Diffusion 的 API 请求，处理异步回复和错误转发。 |
-| `main.cpp` | **程序入口。** | 启动 QML 引擎；实例化并暴露 `viewModel` 对象。 |
-
-### II. QML 前端层 (User Interface)
-
-所有 QML 文件位于 `/qml` 目录下，通过 `StackView` 管理导航。
-
-| 页面文件 | 职责说明 |
-| :--- | :--- |
-| `main.qml` | 启动与导航框架 (`StackView`)。 |
-| `CreatePage.qml` | 故事文本输入，调用 LLM 生成分镜。 |
-| `StoryboardPage.qml` | 展示 LLM 分镜结果，并提供【一键生成视频】入口。 |
-| `ShotDetailPage.qml` | 编辑单个分镜的 Prompt/Narration，并触发 SD 图像生成。 |
-| `AssetsPage.qml` | 资产库和项目列表。 |
-| `PreviewPage.qml` | 视频预览和导出功能。 |
+| **视图 (View)** | `main.qml`, `AssetsPage.qml` 等 | 渲染 UI，管理页面跳转，发起业务操作。 |
+| **视图模型 (ViewModel)** | `ViewModel.h`, `ViewModel.cpp` | 管理任务状态，驱动轮询，处理业务逻辑，转换数据格式。 |
+| **网络管理 (Manager)** | `NetworkManager.h`, `NetworkManager.cpp` | 封装所有 API 请求细节，解析 `TaskID`，转发网络信号。 |
 
 ---
 
-## ✅ 当前开发状态与成就
+## 2. 前端 QML 文件功能与实现逻辑
 
-当前代码库已实现以下关键链路：
+前端采用 `StackView` 进行页面管理，通过 `viewModel` 对象与 C++ 逻辑通信。
 
-1.  **QML ↔ C++ 通信链路完整：** QML 可以调用 C++ 函数，C++ 可以通过信号返回数据和状态。
-2.  **LLM 分镜生成成功：** 成功解决了 Ollama **模型名称**和 **流式 JSON 解析**难题，程序能稳定获取 LLM 返回的 5 个分镜数据。
-3.  **分镜数据绑定：** LLM 生成的分镜数据成功传递并绑定到 `StoryboardPage`，实现了列表展示。
-4.  **图像生成链路就绪：** `ShotDetailPage` 可调用 C++ 向 SD API 发送请求，C++ 端已集成 **Base64 解码**和**本地文件保存**逻辑。
+### 2.1 页面结构与导航
 
-### 待办事项 (TODOs)
+| 文件 | 角色/功能 | 关键实现逻辑 |
+| :--- | :--- | :--- |
+| **`main.qml`** | **应用主入口与导航容器** | 定义 `ApplicationWindow`，使用 `StackView` (ID: `pageStack`) 作为核心导航结构。 |
+| **页面跳转** | (通用逻辑) | 页面通过 `StackView.view.push()` 实现前进；通过 `StackView.view.clear()` 返回到 `AssetsPage.qml` (栈底)。|
+| **交互** | (通用逻辑) | 按钮点击事件调用 C++ 暴露的 `viewModel.generateStoryboard(...)` 等方法。|
 
-1.  **启动 SD API 服务：** 必须手动启动 Stable Diffusion API 服务（如 Python Flask/FastAPI 监听 `http://localhost:5000`），否则图像生成将返回 **"连接被拒绝"** 错误。
-2.  **视频合成：** 实现 `VideoProcessor` 类，集成 FFmpeg 库，完成视频合成和转场逻辑。
-3.  **数据持久化：** 集成 SQLite，实现项目数据的离线存储。
-4.  **修复视频预览：** 解决 Qt Multimedia 插件缺失问题，以启用 `Video` 元素。
+---
+
+## 3. 服务端逻辑与客户端 C++ 驱动
+
+### 3.1 后端 API 接口与任务流
+
+整个流程的核心在于后端 **即时返回 `TaskID`**，将耗时操作转入后台。
+
+| 业务功能 | 请求方法 & URL | 客户端 C++ 函数 | 后端核心动作 | 关键响应 |
+| :--- | :--- | :--- | :--- | :--- |
+| **创建项目 (启动分镜)** | `POST /v1/api/projects` | `createProjectDirect` | 创建项目记录，并立即启动初始分镜任务。 | 返回 `ProjectID` 和初始 **`TaskID`**. |
+| **查询任务状态** | `GET /v1/api/tasks/{id}` | `pollTaskStatus` | 检查任务进度和结果是否准备就绪. | 返回 `status`, `progress` (0-100) 和 `result` (完成时). |
+
+### 3.2 📂 `NetworkManager.cpp` (API 驱动实现)
+
+`NetworkManager` 是所有网络请求的执行者，负责构建正确的请求并解析响应。
+
+* **项目创建实现：** `createProjectDirect` 构造 URL Query 参数，发送 POST 请求。
+* **任务轮询实现：** `pollTaskStatus` 负责拼接 `TaskID` 到 `TASK_API_BASE_URL` 并发送 GET 请求.
+* **响应处理核心：**
+    * 处理 `CreateProjectDirect` 响应时，解析 `ProjectID` 和 `TaskID`，并发射 `taskCreated` 信号.
+    * 处理 `PollStatus` 响应时，解析 `status` 和 `progress`，并根据状态发射 `taskResultReceived` 或 `taskStatusReceived` 信号.
+
+### 3.3 🧠 `ViewModel.cpp` (业务逻辑与状态管理实现)
+
+`ViewModel` 是核心业务层，负责调度任务和管理异步状态。
+
+* **任务启动 (`generateStoryboard`)：** 负责构造参数并调用 `NetworkManager::createProjectDirect` 启动流程.
+* **轮询启动 (`handleTaskCreated`)：** 接收 `TaskID`，将其添加到 `QHash m_activeTasks`，并启动 `QTimer`.
+* **轮询执行 (`pollCurrentTask`)：** 定时遍历 `m_activeTasks` 中的任务，调用 `NetworkManager::pollTaskStatus`.
+* **进度更新 (`handleTaskStatusReceived`)：** 接收进度百分比，通过 `emit compilationProgress` 信号通知 QML 界面.
+* **结果处理 (`handleTaskResultReceived`)：** 接收任务完成信号，调用 `processStoryboardResult` 或 `processImageResult` 等函数进行数据格式转换，并最终通过信号通知 QML.
+
+---
+
+## 4. C++ 文件功能总览
+
+| 文件名 | 类型 | 主要功能 | 核心职责 |
+| :--- | :--- | :--- | :--- |
+| **`main.cpp`** | C++ | 程序入口 | 实例化 `ViewModel`，通过 `setContextProperty` 暴露给 QML. |
+| **`NetworkManager.h`** | H | 接口定义 | 声明所有 API 函数和用于通知 `ViewModel` 的信号 (`taskCreated`, `taskStatusReceived`). |
+| **`NetworkManager.cpp`** | C++ | API 实现 | 实现所有 HTTP/JSON 交互，包括 `POST /projects` 和 `GET /tasks/{id}` 的细节. |
+| **`ViewModel.h`** | H | 逻辑模型定义 | 声明 `Q_INVOKABLE` 接口、槽函数、`QTimer` 和 `m_activeTasks`. |
+| **`ViewModel.cpp`** | C++ | 业务实现 | 实现任务调度、`QTimer` 轮询、信号连接、数据格式转换和结果分发. |

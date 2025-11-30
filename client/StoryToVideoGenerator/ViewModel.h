@@ -5,6 +5,8 @@
 #include <QString>
 #include <QVariant>
 #include <QVariantMap>
+#include <QTimer>
+#include <QHash>
 
 class NetworkManager; // 前置声明
 
@@ -28,13 +30,36 @@ signals:
     void compilationProgress(const QString &storyId, int percent);
 
 private slots:
-    // 内部槽函数：处理 NetworkManager 的回复
-    void handleOllamaResponse(const QString &ollamaRawResponse);
-    void handleImageResponse(int shotId, const QString &base64Image);
+    // 任务状态管理槽函数
+    void handleTaskCreated(const QString &taskId, int shotId);
+    void handleTaskStatusReceived(const QString &taskId, int progress, const QString &status, const QString &message);
+    void handleTaskResultReceived(const QString &taskId, const QVariantMap &resultData);
+    void handleTaskRequestFailed(const QString &taskId, const QString &errorMsg);
+
+    // 定时器相关
+    void startPollingTimer();
+    void stopPollingTimer(const QString &taskId);
+    void pollCurrentTask();
+
     void handleNetworkError(const QString &errorMsg);
 
+
 private:
-    NetworkManager *m_networkManager; // 实际执行网络请求的对象
+    NetworkManager *m_networkManager;
+
+    // 移除 m_currentStoryText, m_currentStyle, m_currentProjectId，因为不再需要存储过渡数据
+
+    // 任务轮询相关
+    QTimer *m_pollingTimer;
+    // 存储所有正在轮询的任务 ID -> 对应的 QML ID (storyId 或 shotId)
+    // key: taskId, value: QVariantMap{ "id": QML ID, "type": "story" or "shot" or "video" }
+    QHash<QString, QVariantMap> m_activeTasks;
+
+    // 私有辅助函数：处理故事板结果和图像结果
+    void processStoryboardResult(const QString &taskId, const QVariantMap &resultData);
+    void processImageResult(int shotId, const QVariantMap &resultData);
+    void processVideoResult(const QString &storyId, const QVariantMap &resultData);
+
 };
 
 #endif // VIEWMODEL_H

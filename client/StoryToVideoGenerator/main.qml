@@ -1,3 +1,4 @@
+
 // main.qml
 import QtQuick 2.6            // 兼容 Qt 5.8.0
 import QtQuick.Controls 2.1   // 兼容 Qt 5.8.0

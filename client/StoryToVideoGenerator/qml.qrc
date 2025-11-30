@@ -1,7 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file>main.qml</file>
-        <file>MainForm.ui.qml</file>
         <file>AssetsPage.qml</file>
         <file>CreatePage.qml</file>
         <file>StoryboardPage.qml</file>

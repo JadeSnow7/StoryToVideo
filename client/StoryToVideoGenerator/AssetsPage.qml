@@ -20,7 +20,7 @@ Page {
             width: parent.width
 
             TextField {
-                Layout.fillWidth: true
+                Layout.fillWidth: true;
                 placeholderText: "按故事名称或生成时间筛选..."
                 // TODO: 绑定搜索逻辑
             }

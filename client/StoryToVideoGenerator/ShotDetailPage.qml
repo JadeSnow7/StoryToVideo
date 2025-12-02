@@ -1,122 +1,159 @@
-
 // ShotDetailPage.qml
-import QtQuick 2.6            // 兼容 Qt 5.8.0
-import QtQuick.Controls 2.1   // 兼容 Qt 5.8.0
-import QtQuick.Layouts 1.2    // 兼容 Qt 5.8.0
+
+import QtQuick 2.6
+import QtQuick.Controls 2.1
+import QtQuick.Layouts 1.2
+import QtQuick.Window 2.2
 
 Page {
     id: shotDetailPage
 
-    // 接收从 StoryboardPage 传递来的分镜数据
-    property var shotData: ({ title: "未命名分镜", status: "未生成", prompt: "一个孤独的宇航员站在火星表面", shotId: 0 })
+    // 接收从 StoryboardPage 传递过来的单个分镜数据
+    property var shotData: ({})
 
-    // 页面标题
-    title: "分镜详情 (" + shotData.title + ")"
+    // --- 可编辑状态属性 (在 onShotDataChanged 中赋值) ---
+    // 添加默认值以防万一
+    property string editablePrompt: ""
+    property string editableNarration: ""
+    property string selectedTransition: "cut"
 
-    // 内部状态，用于编辑
-    property string currentPrompt: shotData.prompt || "无描述"
-    property string narrationText: ""
-    property string transitionEffect: "Crossfade"
-    property string generationStatus: shotData.status
+    // 使用属性值作为页面标题
+    title: qsTr("分镜详情")
+
+    // 假设可用的转场效果列表
+    readonly property var transitionModels: ["cut", "fade", "wipe", "zoom", "dissolve", "crossfade"]
+
+
+    // --- 核心修复：监听 shotData 变化，执行初始化 ---
+    onShotDataChanged: {
+        // 确保 shotData 是一个对象且包含 shotId
+        if (shotData && shotData.shotId) {
+            console.log("✅ ShotDetail: 数据有效性检查通过。ID:", shotData.shotId);
+
+            // 1. 初始化可编辑属性
+            // 使用 || "" 确保属性不会是 null 或 undefined
+            editablePrompt = shotData.shotPrompt || "";
+            editableNarration = shotData.shotDescription || "";
+            selectedTransition = shotData.transition || "cut";
+
+            // 2. 更新页面标题
+            shotDetailPage.title = qsTr("分镜 %1: %2").arg(shotData.shotOrder || "?").arg(shotData.shotTitle || "详情");
+
+        } else {
+            console.error("❌ 数据初始化失败：shotData 为空或未包含 shotId。");
+        }
+    }
+
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 20
         spacing: 15
 
-        // --- 顶部状态与预览 ---
-        RowLayout {
-            width: parent.width
-            Label { text: "当前状态：" + generationStatus; font.bold: true; Layout.fillWidth: true }
+        // --- 临时诊断标签 (检查数据是否到达 UI) ---
+        Text {
+            // 如果成功，这里会显示 Prompt 的前60个字符
+            text: qsTr("DEBUG CHECK (Prompt): %1").arg(editablePrompt.substring(0, 60) + (editablePrompt.length > 60 ? "..." : ""))
+            color: "red"
+            font.bold: true
+            Layout.fillWidth: true
+            Layout.preferredHeight: 20
+        }
+        // ----------------------------------------
 
-            // 预览图占位
-            Rectangle {
-                Layout.preferredWidth: 150
-                Layout.preferredHeight: 100
-                color: "#DCDCDC"
-                Text { anchors.centerIn: parent; text: "分镜预览图" }
+        // --- 1. 图像预览区 ---
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 300
+            color: "#ECEFF1"
+
+            Image {
+                id: shotImage
+                anchors.fill: parent
+                // 注意：这里使用 shotData.imageUrl，确保数据属性名一致
+                source: (shotData && shotData.imageUrl) ? shotData.imageUrl : ""
+                fillMode: Image.PreserveAspectFit
+
+                Text {
+                    visible: shotImage.status !== Image.Ready
+                    text: qsTr("图像加载中...")
+                    anchors.centerIn: parent
+                    color: "gray"
+                }
             }
         }
 
-        // --- 可滚动编辑区域 (使用 Flickable 替代 ScrollView) ---
-        Rectangle { // 外部 Rectangle 用于控制布局填充
+        // --- 2. 详情编辑区 (Flickable) ---
+        Flickable {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "transparent"
+            contentHeight: contentLayout.implicitHeight
 
-            Flickable { // ✅ 使用 Flickable 实现滚动
-                id: editFlickable
-                anchors.fill: parent
-                clip: true
+            ColumnLayout {
+                id: contentLayout
+                Layout.fillWidth: true
+                spacing: 10
 
-                // ContentWidth/Height 必须基于内部 ColumnLayout 的 ID
-                contentWidth: contentLayout.width
-                contentHeight: contentLayout.height
+                // --- 2.1 Prompt 编辑 (文生图提示词) ---
+                Text { text: qsTr("绘画提示词 (Prompt)"); font.bold: true; color: "teal" }
+                TextArea {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 80
+                    text: editablePrompt
+                    onTextChanged: editablePrompt = text
+                    wrapMode: Text.WordWrap
+                    color: "black"
+                }
 
-                ColumnLayout {
-                    id: contentLayout // 内部布局的 ID，用于 Flickable 引用
-                    width: editFlickable.width // 宽度填充 Flickable
-                    spacing: 15
+                // --- 2.2 配音文案/旁白编辑 (Narration) ---
+                Text { text: qsTr("旁白/文案 (Narration Text)"); font.bold: true }
+                TextArea {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 80
+                    text: editableNarration
+                    onTextChanged: editableNarration = text
+                    wrapMode: Text.WordWrap
+                    color: "black"
+                }
 
-                    // 1. Prompt 文本框 (核心编辑区)
-                    Label { text: "Prompt 文本 (图像生成描述):" }
-                    // 使用 Rectangle 包装 TextArea 来模拟 Controls 样式
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 100
-                        border.color: "#AAAAAA"
-                        border.width: 1
-                        radius: 4
-                        color: "white"
-                        TextArea {
-                            anchors.fill: parent
-                            text: currentPrompt
-                            placeholderText: "输入或修改用于生成图像的详细描述词..."
-                            onTextChanged: currentPrompt = text
-                            color: "black"
-                        }
-                    }
+                // --- 2.3 视频转场选择 (Transition) ---
+                Text { text: qsTr("视频转场效果"); font.bold: true }
+                ComboBox {
+                    Layout.fillWidth: true
+                    model: transitionModels
+                    currentIndex: model.indexOf(selectedTransition)
+                    onCurrentIndexChanged: { selectedTransition = model[currentIndex]; }
+                }
+            }
+        }
 
-                    // 2. Narration (配音文本)
-                    Label { text: "Narration 文本 (配音旁白/对话):" }
-                    TextField {
-                        Layout.fillWidth: true
-                        placeholderText: "请输入此镜头所需的旁白或对话文本"
-                        onTextChanged: narrationText = text
-                    }
+        // --- 3. 操作按钮 ---
+        Button {
+            text: qsTr("触发文生图任务 (生成图像)")
+            Layout.fillWidth: true
+            Layout.preferredHeight: 40
+            enabled: editablePrompt.trim().length > 0 && shotData.shotId
+            onClicked: {
+                // 确保 shotData.shotId 存在
+                if (shotData.shotId) {
+                    viewModel.generateShotImage(
+                        shotData.shotId,
+                        editablePrompt,
+                        selectedTransition
+                    );
+                    console.log("请求重新生成分镜:", shotData.shotId);
+                }
+            }
+        }
 
-                    // 3. 视频过渡效果选择
-                    Label { text: "视频过渡效果 (与下一镜头):" }
-                    ComboBox {
-                        Layout.fillWidth: true
-                        model: ["Crossfade", "Ken Burns (平移缩放)", "Cut (硬切)", "Volume Mix"]
-                        currentIndex: model.indexOf(transitionEffect)
-                        onCurrentIndexChanged: transitionEffect = model[currentIndex]
-                    }
-
-                    // 4. 保存更改并生成图像按钮
-                    Button {
-                        text: generationStatus === "生成中..." ? "生成中..." : "保存更改并生成图像"
-                        Layout.alignment: Qt.AlignRight
-                        enabled: generationStatus !== "生成中..." && currentPrompt.trim().length > 0
-
-                        onClicked: {
-                            generationStatus = "生成中...";
-
-                            // 核心调用：使用 C++ ViewModel 的函数
-                            viewModel.generateShotImage(
-                                shotData.shotId,
-                                currentPrompt,
-                                transitionEffect
-                            );
-
-                            console.log("分镜图像生成请求已发送，Shot ID:", shotData.shotId);
-
-                            // 实际的 generationStatus 更新应来自 C++ 的 imageGenerationFinished 信号
-                        }
-                    }
-                } // End ColumnLayout (contentLayout)
-            } // End Flickable
-        } // End Rectangle
-    } // End main ColumnLayout
+        // 返回按钮
+        Button {
+            text: qsTr("返回故事板")
+            Layout.fillWidth: true
+            Layout.preferredHeight: 40
+            onClicked: {
+                StackView.view.pop();
+            }
+        }
+    }
 }

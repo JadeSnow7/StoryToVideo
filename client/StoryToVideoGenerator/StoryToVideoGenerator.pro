@@ -6,7 +6,7 @@ QT += qml quick
 QT += core gui quick qml network multimedia # 确保 multimedia
 # StoryToVideoGenerator.pro (确保添加了 network 模块)
 QT += core gui quick qml network multimedia sql
-
+QT += multimedia
 CONFIG += c++11
 
 SOURCES += main.cpp \

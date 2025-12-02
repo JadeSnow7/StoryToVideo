@@ -1,128 +1,320 @@
-
 // StoryboardPage.qml
-import QtQuick 2.6            // 兼容 Qt 5.8.0
-import QtQuick.Controls 2.1   // 兼容 Qt 5.8.0
-import QtQuick.Layouts 1.2    // 兼容 Qt 5.8.0
+
+import QtQuick 2.6
+import QtQuick.Controls 2.1
+import QtQuick.Layouts 1.2
+import QtQuick.Window 2.2
 
 Page {
     id: storyboardPage
-    property var storyId: "" // 从 CreatePage 接收的故事ID
-    property var storyTitle: "加载中..." // 接收标题
+    title: qsTr("故事板预览")
 
-    property var actualShotsModel: []
+    // 状态属性：用于控制视频生成进度和按钮状态
+    property bool isVideoGenerating: false
+    property string videoStatusMessage: ""
 
-    title: "分镜管理 (" + storyId + ")"
+    // 基础常量：API 地址前缀
+    readonly property string apiBaseUrl: "http://119.45.124.222:8081"
 
-    // --- 模拟分镜数据模型 ---
-//    property ListModel shotsModel: ListModel {
-//        ListElement { shotId: 1; title: "雨中追逐"; status: "已生成"; statusColor: "#4CAF50" } // 绿色
-//        ListElement { shotId: 2; title: "城市夜景"; status: "未生成"; statusColor: "#9E9E9E" } // 灰色
-//        ListElement { shotId: 3; title: "最终对决"; status: "生成中..."; statusColor: "#2196F3" } // 蓝色
-//        ListElement { shotId: 4; title: "镜头四"; status: "失败"; statusColor: "#F44336" } // 红色
-//        ListElement { shotId: 5; title: "镜头五"; status: "已生成"; statusColor: "#4CAF50" }
-//    }
+    // ----------------------------------------------------
+    // 1. 接收属性 (从 CreatePage 导航时传递)
+    // ----------------------------------------------------
+    property string storyId: ""         // 接收项目 ID
+    property string storyTitle: ""      // 接收项目标题
+    property var shotsData: []          // 接收分镜列表 (QVariantList)
 
+    // 【核心修复】接收 StackView 的引用 (需要 CreatePage.qml 传递 pageStack)
+    property var stackViewRef: null
+
+    // ----------------------------------------------------
+    // 2. 数据模型
+    // ----------------------------------------------------
+    ListModel {
+        id: storyboardModel
+    }
+    // ----------------------------------------------------
+    // 4. 页面初始化和信号连接
+    // ----------------------------------------------------
+    Component.onCompleted: {
+            // [新增调试] 检查 viewModel 对象是否有效
+            if (viewModel) {
+                console.log("DEBUG: ViewModel target is valid (Object found).");
+            } else {
+                console.error("FATAL ERROR: ViewModel target is null or undefined!");
+            }
+
+            if (shotsData && shotsData.length > 0) {
+                loadShotsModel(shotsData);
+            } else {
+                console.warn("Component.onCompleted: shotsData 为空。");
+            }
+            console.log("DEBUG CHECK: Now defining the ViewModel signal CONNECTIONS block.");
+        }
+
+    Connections {
+        target: viewModel
+
+        onStoryboardGenerated: {
+            storyId = storyData.id;
+            storyTitle = storyData.title;
+            loadShotsModel(storyData.shots);
+        }
+
+        // [核心] 视频进度连接 (使用 sId, pct 避免冲突)
+
+        onCompilationProgress: {
+
+                    // C++ 信号参数名：storyId, percent (隐式可用)
+                    console.log("DEBUG A2: onCompilationProgress HANDLER FIRED. Progress:", percent, "ID:", storyId);
+
+                    if (storyId === storyboardPage.storyId) {
+                        console.log("QML DEBUG A2: Project ID Match (Signal ID === Page ID).");
+
+                        storyboardPage.isVideoGenerating = (percent < 100);
+                        storyboardPage.videoStatusMessage = qsTr("视频合成中 (%1)...").arg(percent);
+
+                        if (percent === 100) {
+                            console.log("QML DEBUG A2: Compilation reached 100%. Calling displayVideoResource...");
+                            displayVideoResource(storyId); // 使用隐式 storyId
+                        }
+                    } else {
+                        console.warn("QML WARNING A2: Project ID Mismatch. Ignoring signal.");
+                    }
+                }
+
+                onGenerationFailed: {
+                    storyboardPage.isVideoGenerating = false;
+                    storyboardPage.videoStatusMessage = qsTr("生成失败: %1").arg(errorMsg);
+                    console.error("生成失败:", errorMsg);
+                }
+    }
+
+    // ----------------------------------------------------
+    // 5. UI 布局
+    // ----------------------------------------------------
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 20 // 页面内边距
-        spacing: 20
+        anchors.margins: 15
+        spacing: 15
 
-        Label { text: "当前项目分镜列表：" }
-
-        // --- 横向滚动区域 (使用 Flickable 替代 ScrollView) ---
-        Rectangle {
+        // 顶部标题
+        Text {
+            text: qsTr("项目 ID: %1").arg(storyId.length > 0 ? storyId : "N/A")
+            font.pixelSize: 14
+            color: "gray"
             Layout.fillWidth: true
-            Layout.preferredHeight: 280 // 固定卡片展示区域高度
-            color: "#F0F0F0" // 背景色便于观察区域
+        }
 
-            Flickable {
-                id: horizontalFlickable
-                anchors.fill: parent
-                contentWidth: shotsListView.width // 内容宽度由 ListView 决定
-                contentHeight: parent.height
-                clip: true // 裁剪滚动溢出的内容
+        // 分镜列表 (GridView)
+        GridView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            model: storyboardModel
+            cellWidth: 320
+            cellHeight: 320
 
-                ListView {
-                    id: shotsListView
-                    orientation: ListView.Horizontal
-                    spacing: 15
-                    model: actualShotsModel
+            delegate: Item {
+                width: GridView.view.cellWidth
+                height: GridView.view.cellHeight
 
-                    // delegate: 这里嵌入分镜卡片的结构，或者使用单独的 ShotCard.qml
-                    delegate: Component {
-                        // 统一使用 Rectangle 作为分镜卡片
-                        Rectangle {
-                            width: 250; height: 260
-                            color: "white"
-                            radius: 8
-                            border.color: model.statusColor
-                            border.width: 2
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 5
+                    radius: 8
+                    border.color: "#DDDDDD"
+                    border.width: 1
+                    color: "white"
 
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 20
-                                spacing: 8
-
-                                // 标题和状态
-                                RowLayout {
-                                    Label { text: "SHOT " + model.shotId; font.bold: true }
-                                    Label { text: model.title; Layout.fillWidth: true }
-
-                                    // 状态标签
-                                    Rectangle {
-                                        color: model.statusColor
-                                        radius: 4
-                                        Text {
-                                            text: model.status
-                                            color: "white"
-                                            font.pointSize: 9
-                                            anchors.centerIn: parent
-                                            anchors.margins: 4
-                                        }
-                                    }
+                    // 点击区域 (用于导航到 ShotDetailPage)
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            // [核心修复] 显式构造对象，并使用 pageStack.push()
+                            pageStack.push(Qt.resolvedUrl("ShotDetailPage.qml"), {
+                                shotData: {
+                                    shotId: model.shotId,
+                                    shotOrder: model.shotOrder,
+                                    shotTitle: model.shotTitle,
+                                    shotDescription: model.shotDescription,
+                                    shotPrompt: model.shotPrompt,
+                                    status: model.status,
+                                    imageUrl: model.imageUrl,
+                                    transition: model.transition
                                 }
+                            });
+                        }
 
-                                // 缩略图占位符
-                                Rectangle {
+                        // ... (布局内容)
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 5
+
+                            // 1. 状态标签和图像预览
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Text {
+                                    text: mapStatus(model.status).text
+                                    color: mapStatus(model.status).color
+                                    font.pixelSize: 12
+                                    font.bold: true
                                     Layout.fillWidth: true
-                                    Layout.preferredHeight: 150
-                                    color: "#CCCCCC"
-                                    Text { anchors.centerIn: parent; text: "缩略图预览" }
                                 }
 
-                                // 详情按钮 (底部)
-                                Button {
-                                    text: "详情"
-                                    onClicked: {
-                                        // 传递一个明确包含所有必要字段的对象
-                                        pageStack.push(Qt.resolvedUrl("ShotDetailPage.qml"), {
-                                            shotData: {
-                                                shotId: model.shotId,
-                                                title: model.title,
-                                                prompt: model.prompt, // 确保 prompt 字段被传递
-                                                status: model.status
-                                                // ... 确保所有 ShotDetailPage 需要的属性都在这里
-                                            }
-                                        });
+                                // 2. 图像预览区
+                                Rectangle {
+                                    Layout.preferredWidth: 100
+                                    Layout.preferredHeight: 100
+                                    color: "#ECEFF1"
+
+                                    Image {
+                                        source: model.imageUrl
+                                        anchors.fill: parent
+                                        fillMode: Image.PreserveAspectFit
                                     }
                                 }
+                            }
+
+                            // 3. 分镜序号和描述
+                            Text {
+                                text: qsTr("分镜 %1: %2").arg(model.shotOrder).arg(model.shotTitle)
+                                font.bold: true
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: model.shotDescription
+                                font.pixelSize: 12
+                                color: "darkgray"
+                                Layout.maximumHeight: 40
+                                elide: Text.ElideRight
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 底部：生成视频按钮
+        // 视频生成按钮
         Button {
-            text: "一键批量生成视频"
-            Layout.alignment: Qt.AlignHCenter
-            Layout.preferredHeight: 50
+            // [修复] 兼容 Qt 5.8 语法
+            text: isVideoGenerating
+                ? qsTr("合成中 (%1)").arg(
+                    (videoStatusMessage.match(/(\d+%)/) && videoStatusMessage.match(/(\d+%)/)[1])
+                        ? videoStatusMessage.match(/(\d+%)/)[1]
+                        : "..."
+                  )
+                : qsTr("生成最终视频")
 
+            Layout.fillWidth: true
+            Layout.preferredHeight: 40
+            enabled: !isVideoGenerating && storyboardModel.count > 0 && storyId.length > 0
             onClicked: {
-                // TODO: [后端接口] 调用 C++ VideoProcessor 触发合成任务
-                console.log("启动视频合成任务...");
+                if (!isVideoGenerating) {
+                    viewModel.startVideoCompilation(storyId);
+                    isVideoGenerating = true;
+                    videoStatusMessage = qsTr("启动合成...");
+                }
             }
         }
+
+        // 状态消息显示
+        Label {
+            text: videoStatusMessage
+            Layout.fillWidth: true
+            horizontalAlignment: Text.AlignHCenter
+            color: isVideoGenerating ? "blue" : (videoStatusMessage.includes("成功") ? "green" : "red")
+        }
     }
-}
+
+
+    // ----------------------------------------------------
+    // 3. 核心函数：数据加载与跳转
+    // ----------------------------------------------------
+    function loadShotsModel(shotsList) {
+        storyboardModel.clear();
+
+        console.log("--- DEBUG: loadShotsModel 函数已运行 ---");
+
+        if (!shotsList || shotsList.length === 0) return;
+
+        for (var i = 0; i < shotsList.length; i++) {
+            var shot = shotsList[i];
+
+            // 调试输出 (用于验证数据完整性)
+            console.log("Shot " + (i + 1) + " ID:", shot.id,
+                        "Title:", shot.title,
+                        "Prompt:", shot.prompt);
+
+            // 构造完整的图像 URL
+            var fullImageUrl = apiBaseUrl + shot.imagePath;
+
+            storyboardModel.append({
+                // ListModel 的键名
+                shotId: shot.id,
+                shotOrder: shot.order,
+                shotTitle: shot.title,
+                shotDescription: shot.description,
+                shotPrompt: shot.prompt,
+                status: shot.status,
+                imageUrl: fullImageUrl,
+                transition: shot.transition
+            });
+        }
+
+        console.log("DEBUG: ListModel 填充完成，总数:", storyboardModel.count);
+        storyboardPage.title = qsTr("故事板预览: %1").arg(storyTitle);
+    }
+
+    // *** 视频合成完成后的跳转函数 (使用 stackViewRef) ***
+    function displayVideoResource(projectId) {
+        // 构造视频资源的 URL
+        var videoUrl = apiBaseUrl + "/static/tasks/123/proj-test-0001.mp4";
+
+        // --- DIAGNOSTIC LOG 1: Function Entry ---
+        console.log("NAV DEBUG 1: Display resource function entered. Project:", projectId);
+        console.log("NAV DEBUG 2: Checking stackViewRef validity (Type):", typeof stackViewRef);
+
+        // 【核心修复】使用 Qt.callLater 延迟执行
+        Qt.callLater(function() {
+            // --- DIAGNOSTIC LOG 3: CallLater Execution ---
+            console.log("NAV DEBUG 3: Qt.callLater executed (Next event loop).");
+
+            if (stackViewRef) {
+                // --- DIAGNOSTIC LOG 4: Valid Stack Reference ---
+                console.log("NAV DEBUG 4: Stack reference found. Attempting push...");
+
+                try {
+                    // 使用传递进来的 StackView 引用进行 push
+                    stackViewRef.push(Qt.resolvedUrl("PreviewPage.qml"), {
+                        videoSource: videoUrl,
+                        projectId: projectId
+                    });
+                    console.log("✅ NAV SUCCESS: PreviewPage push succeeded.");
+                } catch (e) {
+                    console.error("❌ NAV FAILURE 5: Error during stack push (Method failed).", e);
+                }
+            } else {
+                console.error("❌ NAV FAILURE 5: stackViewRef is NULL. Navigation skipped.");
+            }
+        });
+    }
+
+
+
+    // ----------------------------------------------------
+    // 6. 状态映射辅助函数
+    // ----------------------------------------------------
+    function mapStatus(status) {
+        switch (status) {
+            case "finished":
+            case "generated": return { color: "#4CAF50", text: qsTr("✓ 已完成") };
+            case "pending":
+            case "running": case "processing": return { color: "#FFC107", text: qsTr("... 生成中") };
+            case "error": case "failed": return { color: "#F44336", text: qsTr("✗ 失败") };
+            default: return { color: "gray", text: qsTr("未知") };
+        }
+    }
 }

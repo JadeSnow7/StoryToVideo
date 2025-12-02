@@ -6,6 +6,10 @@
 
 int main(int argc, char *argv[])
 {
+    qputenv("QT_MULTIMEDIA_PREFERRED_PLUGINS", "directshow");
+    qputenv("QT_OPENGL", "angle");  // 对于 Windows
+    qputenv("QT_ANGLE_PLATFORM", "d3d11");  // 使用 Direct3D 11
+
     QGuiApplication app(argc, argv);
     QQmlApplicationEngine engine;
 

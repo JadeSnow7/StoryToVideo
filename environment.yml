@@ -1,0 +1,40 @@
+name: storyvideo
+channels: [conda-forge, pytorch, nvidia]
+dependencies:
+  - python=3.10
+  - pip
+  - fastapi
+  - uvicorn
+  - pydantic
+  - pillow
+  - tqdm
+  - ffmpeg
+  - pkg-config
+  - libsndfile
+  - libglib
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.1
+  - pip:
+    - diffusers==0.35.2
+    - transformers==4.36.2
+    - accelerate
+    - safetensors
+    - opencv-python
+    - soundfile
+    - ffmpeg-python
+    - modelscope
+    - httpx
+    - imageio
+    - imageio-ffmpeg
+    - numpy==1.26.4
+    - pandas==2.1.4
+    - addict
+    - datasets==2.14.6
+    - pyarrow==12.0.1
+    - simplejson
+    - sortedcontainers
+    - hyperpyyaml
+    - onnxruntime
+    - whisper
+    - torchaudio==2.3.1+cu121

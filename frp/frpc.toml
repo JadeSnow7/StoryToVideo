@@ -1,0 +1,11 @@
+serverAddr = "<frps_host>"
+serverPort = 7000
+auth.method = "token"
+auth.token = "<token>"   # 与 frps 一致
+
+[[proxies]]
+name = "web"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8000
+remotePort = 18000

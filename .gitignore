@@ -1,0 +1,22 @@
+# Runtime artifacts
+data/
+logs/
+
+# Model caches / checkpoints
+pretrained_models/
+.cache/
+
+# Generated media / weights
+*.mp4
+*.wav
+*.png
+*.pt
+*.tar.gz
+*.zip
+
+# Python/IDE noise
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/

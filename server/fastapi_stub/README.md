@@ -12,6 +12,12 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
+Run the lightweight tests locally with:
+
+```bash
+pytest
+```
+
 ## Django (reference) / 参考步骤
 1) `python -m venv .venv && source .venv/bin/activate`  
 2) `pip install django djangorestframework gunicorn psycopg2-binary`  
@@ -22,6 +28,7 @@ uvicorn main:app --reload --port 8000
 
 ## API Surface (MVP) / API 范围
 - POST `/api/projects/create`
+- GET `/api/projects`
 - GET `/api/projects/{id}/storyboard`
 - POST `/api/shots/{id}/update_prompt`
 - POST `/api/shots/{id}/generate_image`

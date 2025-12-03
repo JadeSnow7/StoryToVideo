@@ -9,6 +9,7 @@ find_package(Qt6 6.5 COMPONENTS Quick REQUIRED)
 qt_standard_project_setup()
 
 qt_add_executable(${PROJECT_NAME}
+    MACOSX_BUNDLE
     src/main.cpp
 )
 
@@ -27,3 +28,17 @@ install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+if(APPLE)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.storytovideo.app"
+        MACOSX_BUNDLE_BUNDLE_NAME "StoryToVideo"
+        MACOSX_BUNDLE TRUE
+    )
+
+    set(CPACK_GENERATOR "DragNDrop")
+    set(CPACK_PACKAGE_NAME "StoryToVideo")
+    set(CPACK_PACKAGE_FILE_NAME "StoryToVideo-macOS")
+    set(CPACK_DMG_VOLUME_NAME "StoryToVideo")
+    include(CPack)
+endif()

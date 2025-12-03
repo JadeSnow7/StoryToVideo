@@ -32,6 +32,10 @@ class TaskResponse(BaseModel):
     task_id: str
 
 
+class ProjectsListResponse(BaseModel):
+    projects: List[dict]
+
+
 @app.post("/api/projects/create", response_model=ProjectResponse)
 def create_project(req: CreateProjectRequest):
     project_id = str(uuid.uuid4())
@@ -93,6 +97,11 @@ def _create_task(task_type: str, payload: dict):
     return task_id
 
 
+@app.get("/api/projects", response_model=ProjectsListResponse)
+def list_projects():
+    return {"projects": list(PROJECTS.values())}
+
+
 @app.post("/api/shots/{shot_id}/generate_image", response_model=TaskResponse)
 def generate_image(shot_id: str):
     shot = SHOTS.get(shot_id)
@@ -120,4 +129,9 @@ def task_complete(task_id: str, result_url: str):
     task["status"] = "SUCCESS"
     task["progress"] = 100
     task["result"] = {"url": result_url}
+    payload = task.get("payload") or {}
+    shot_id = payload.get("shot_id")
+    if shot_id and shot_id in SHOTS:
+        SHOTS[shot_id]["status"] = "SUCCESS"
+        SHOTS[shot_id]["image_url"] = result_url
     return {"ok": True}

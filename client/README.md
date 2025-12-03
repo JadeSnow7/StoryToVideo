@@ -58,3 +58,30 @@
 2.  **视频合成：** 实现 `VideoProcessor` 类，集成 FFmpeg 库，完成视频合成和转场逻辑。
 3.  **数据持久化：** 集成 SQLite，实现项目数据的离线存储。
 4.  **修复视频预览：** 解决 Qt Multimedia 插件缺失问题，以启用 `Video` 元素。
+
+---
+
+## 🍎 在 macOS 上打包客户端
+
+> 需要在安装了 Xcode Command Line Tools 与 Homebrew 的 macOS 环境执行。
+
+1.  安装依赖（Qt 和 Ninja）：
+
+    ```bash
+    brew install qt ninja
+    ```
+
+2.  运行打包脚本（默认输出到 `build-macos/install`）：
+
+    ```bash
+    ./scripts/package_mac_client.sh
+    ```
+
+    - 生成的 `StoryToVideo.app` 会放在 `build-macos/install/` 目录。
+    - 同目录会产出可分发的 `StoryToVideo-macOS.dmg`。
+
+3.  如果 Qt 非通过 Homebrew 安装，可手动指定路径：
+
+    ```bash
+    QT_PREFIX=/path/to/Qt ./scripts/package_mac_client.sh
+    ```

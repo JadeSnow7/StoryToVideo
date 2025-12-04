@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 一键调用端到端推理脚本，需服务已启动
+# 一键调用端到端推理脚本，需模型服务已启动（聚合或分服务）
 # 用法：
-#   ./scripts/run_infer.sh "故事文本" "风格" [分镜数] [fps] [总帧数]
+#   ./model/scripts/run_infer.sh "故事文本" "风格" [分镜数] [fps] [总帧数]
 
 set -euo pipefail
 
@@ -24,13 +24,19 @@ CFG_SCALE=1.5
 SPEED=1.0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MODEL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$MODEL_ROOT/.." && pwd)"
+BASE_URL="${MODEL_BASE_URL:-http://localhost:8000}"
 
-python "$ROOT/scripts/run_pipeline.py" \
+cd "$REPO_ROOT"
+export MODEL_ROOT="$REPO_ROOT"
+
+python "$MODEL_ROOT/scripts/run_pipeline.py" \
   --story "$STORY" \
   --style "$STYLE" \
   --scenes "$SCENES" \
   --height "$HEIGHT" --width "$WIDTH" \
   --img-steps "$IMG_STEPS" --cfg-scale "$CFG_SCALE" \
   --fps "$FPS" --video-frames "$VIDEO_FRAMES" \
-  --speed "$SPEED"
+  --speed "$SPEED" \
+  --base-url "$BASE_URL"

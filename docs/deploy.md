@@ -12,15 +12,14 @@
 workspace/
   docs/
   gateway/
-  services/
-    llm/
-    txt2img/
-    img2vid/
-    tts/
+  model/
+    main.py
+    services/
+    scripts/
   data/
     storyboards/ frames/ clips/ audio/ final/
-  scripts/
-  docker/
+  client/
+  pretrained_models/
 ```
 
 ## 依赖安装（示例命令）
@@ -36,6 +35,17 @@ pip install diffusers transformers accelerate safetensors xformers
 pip install soundfile ffmpeg-python
 ```
 
+## 模型节点启动（聚合模式）
+```bash
+cd StoryToVideo
+MODEL_ROOT="$PWD" uvicorn model.main:app --host 0.0.0.0 --port 8000
+# 关键路由：
+#   POST /llm/storyboard
+#   POST /txt2img/generate
+#   POST /img2vid/generate
+#   POST /tts/narration
+```
+
 ## 模型下载与启动
 ### LLM：Qwen2.5-0.5B @ Ollama
 ```bash
@@ -43,28 +53,30 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:0.5b
 # 启动 ollama 服务（默认 11434）
 ollama serve
-# llm-service 可用 FastAPI 包装调用 ollama API（/api/chat）
+# llm-service FastAPI 在 model/services/llm.py，可直接 uvicorn model.services.llm:app
 ```
 
 ### 文生图：Stable Diffusion Turbo @ diffusers
 ```bash
-# 在 services/txt2img/ 下编写启动脚本，示例依赖：
-pip install "git+https://github.com/huggingface/diffusers.git"
-# 运行示例（伪命令，实际脚本需另写）
-python services/txt2img/main.py --model "stabilityai/sd-turbo" --device cuda:0
+# 单服务调试：端口 8002
+cd StoryToVideo
+uvicorn model.services.txt2img:app --host 0.0.0.0 --port 8002
+# 或使用 ./model/scripts/run_txt2img.sh
 ```
 
 ### 图生视频：Stable-Video-Diffusion-Img2Vid @ diffusers
 ```bash
-pip install opencv-python
-python services/img2vid/main.py --model "stabilityai/stable-video-diffusion-img2vid" --device cuda:0
+cd StoryToVideo
+uvicorn model.services.img2vid:app --host 0.0.0.0 --port 8003
+# 或使用 ./model/scripts/run_img2vid.sh
 ```
 
 ### TTS：CosyVoice-mini
 ```bash
-# 需准备 cosyvoice 模型文件，可在启动脚本中自动下载
-pip install modelscope
-python services/tts/main.py --model cosyvoice-mini --device cuda:0
+# 需准备 CosyVoice 代码与权重，MODEL_ID 默认为 pretrained_models/CosyVoice2-0.5B/...
+cd StoryToVideo
+uvicorn model.services.tts:app --host 0.0.0.0 --port 8004
+# 或使用 ./model/scripts/run_tts.sh
 ```
 
 ## 网关与编排

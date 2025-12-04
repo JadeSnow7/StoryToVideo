@@ -1,0 +1,45 @@
+{
+  "id": "string",
+  "projectId": "string",
+  "type": "string",
+  "status": "string",
+  "progress": 0,
+  "message": "string",
+  "parameters": {
+    "shot_defaults": {
+      "shot_count": 0,
+      "style": "string",
+      "storyText": "string"
+    },
+    "shot": {
+      "transition": "string",
+      "shotId": "string",
+      "image_width": "string",
+      "image_height": "string",
+      "prompt": "string"
+    },
+    "video": {
+      "resolution": "string",
+      "fps": 0,
+      "format": "string",
+      "bitrate": 0
+    },
+    "tts": {
+      "voice": "string",
+      "lang": "string",
+      "sample_rate": 0,
+      "format": "string"
+    }
+  },
+  "result": {
+    "resource_type": "string",
+    "resource_id": "string",
+    "resource_url": "string"
+  },
+  "error": "string",
+  "estimatedDuration": 0,
+  "startedAt": "string",
+  "finishedAt": "string",
+  "createdAt": "string",
+  "updatedAt": "string"
+}

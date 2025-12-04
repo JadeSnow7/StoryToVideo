@@ -1,9 +1,10 @@
 # Runtime artifacts
 data/
 logs/
+CosyVoice
+pretrained_models
 
 # Model caches / checkpoints
-pretrained_models/
 .cache/
 
 # Generated media / weights

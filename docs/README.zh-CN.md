@@ -25,7 +25,7 @@
 ## 目录建议
 - `docs/`：中文文档（本文件、apis、pipeline、deploy、ops）。
 - `gateway/`：FastAPI 网关与编排逻辑、任务表、ffmpeg 调用。
-- `services/llm/`、`services/txt2img/`、`services/img2vid/`、`services/tts/`：各自的 FastAPI/推理脚本、Dockerfile。
+- `model/services/`：LLM/TXT2IMG/IMG2VID/TTS FastAPI 服务；`model/scripts/` 提供启动与编排脚本。
 - `data/`：默认输出；实际可挂载到持久化卷或对象存储挂载点。
 - `scripts/`：启动/测试/下载模型脚本。
 - `docker/`：可选 Compose 或单服务 Dockerfile。

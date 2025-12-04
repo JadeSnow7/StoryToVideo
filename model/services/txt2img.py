@@ -1,6 +1,4 @@
-"""
-FastAPI text-to-image service using Stable Diffusion Turbo (diffusers).
-"""
+"""FastAPI text-to-image service using Stable Diffusion Turbo (diffusers)."""
 
 import os
 import time
@@ -10,17 +8,18 @@ from typing import List, Optional
 
 import torch
 from diffusers import AutoPipelineForText2Image
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from model.services.utils import resolve_project_root
 
+router = APIRouter()
 
+PROJECT_ROOT = resolve_project_root()
 MODEL_ID = os.getenv("MODEL_ID", "stabilityai/sd-turbo")
 DEVICE = os.getenv("DEVICE", "cuda")
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "data/frames"))
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/frames"))
 
-app = FastAPI(title="TXT2IMG Service (SD Turbo)", version="0.1.0")
-
-pipe = None  # will be loaded at startup
+pipe = None  # lazy loaded
 
 
 class ImageStyle(BaseModel):
@@ -57,12 +56,10 @@ def load_pipeline():
         return
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     model_kwargs = {"torch_dtype": dtype}
-    # variant="fp16" may be required for sd-turbo weights; keep it optional.
     model_kwargs["variant"] = "fp16"
     p = AutoPipelineForText2Image.from_pretrained(MODEL_ID, **model_kwargs)
     if DEVICE:
         p = p.to(DEVICE)
-    # xformers is optional; ignore if not available.
     try:
         p.enable_xformers_memory_efficient_attention()
     except Exception:
@@ -92,22 +89,16 @@ def save_image(image, scene_id: Optional[str], seed: int) -> str:
     return str(path)
 
 
-@app.on_event("startup")
 async def _startup():
     load_pipeline()
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
-    return {
-        "status": "ok",
-        "model": MODEL_ID,
-        "device": DEVICE,
-        "output_dir": str(OUTPUT_DIR),
-    }
+    return {"status": "ok", "model": MODEL_ID, "device": DEVICE, "output_dir": str(OUTPUT_DIR)}
 
 
-@app.post("/generate", response_model=GenerateResponse)
+@router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest):
     if pipe is None:
         load_pipeline()
@@ -140,8 +131,21 @@ async def generate(req: GenerateRequest):
     return {"images": items}
 
 
-# Run directly: python services/txt2img/main.py
+def register_app(app: FastAPI, prefix: str = "") -> None:
+    app.include_router(router, prefix=prefix)
+    app.add_event_handler("startup", _startup)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="TXT2IMG Service (SD Turbo)", version="0.1.0")
+    register_app(app)
+    return app
+
+
+app = create_app()
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("services.txt2img.main:app", host="0.0.0.0", port=8002, reload=False)
+    uvicorn.run("model.services.txt2img:app", host="0.0.0.0", port=8002, reload=False)

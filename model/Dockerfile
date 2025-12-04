@@ -4,7 +4,8 @@ FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    MODEL_ROOT=/workspace
 
 WORKDIR /workspace
 
@@ -20,11 +21,12 @@ RUN python3 -m pip install --upgrade pip \
        torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 \
        --index-url https://download.pytorch.org/whl/cu124
 
-COPY requirements.txt ./
-RUN python3 -m pip install -r requirements.txt
+COPY requirements.txt ./model/requirements.txt
+RUN python3 -m pip install -r model/requirements.txt
 
-COPY main.py ./
+COPY . ./model
+ENV PYTHONPATH="/workspace"
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "model.main:app", "--host", "0.0.0.0", "--port", "8000"]

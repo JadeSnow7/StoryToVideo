@@ -1,6 +1,4 @@
-"""
-FastAPI image-to-video service using Stable-Video-Diffusion-Img2Vid (diffusers).
-"""
+"""FastAPI image-to-video service using Stable-Video-Diffusion-Img2Vid (diffusers)."""
 
 import os
 import time
@@ -11,16 +9,17 @@ from typing import Optional
 import torch
 from diffusers import StableVideoDiffusionPipeline
 from diffusers.utils import export_to_video
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel, Field
+from model.services.utils import resolve_project_root
 
+router = APIRouter()
 
+PROJECT_ROOT = resolve_project_root()
 MODEL_ID = os.getenv("MODEL_ID", "stabilityai/stable-video-diffusion-img2vid")
 DEVICE = os.getenv("DEVICE", "cuda")
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "data/clips"))
-
-app = FastAPI(title="IMG2VID Service (SVD Img2Vid)", version="0.1.0")
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/clips"))
 
 pipe = None  # lazy loaded
 
@@ -62,7 +61,6 @@ def load_pipeline():
         p.enable_xformers_memory_efficient_attention()
     except Exception:
         pass
-    # Try to lower VRAM usage on smaller GPUs.
     try:
         p.enable_sequential_cpu_offload()
     except Exception:
@@ -103,17 +101,17 @@ def save_video(frames, fps: int, scene_id: Optional[str], seed: Optional[int]) -
     return str(out_path)
 
 
-@app.on_event("startup")
 async def _startup():
     load_pipeline()
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     return {"status": "ok", "model": MODEL_ID, "device": DEVICE, "output_dir": str(OUTPUT_DIR)}
 
 
-@app.post("/img2vid", response_model=GenerateResponse)
+@router.post("/generate", response_model=GenerateResponse, name="img2vid_generate")
+@router.post("/img2vid", response_model=GenerateResponse, include_in_schema=False)
 async def generate(req: GenerateRequest):
     if pipe is None:
         load_pipeline()
@@ -143,8 +141,21 @@ async def generate(req: GenerateRequest):
     return {"video": video_path, "fps": req.fps, "seed": req.seed}
 
 
-# Allow direct run: python services/img2vid/main.py
+def register_app(app: FastAPI, prefix: str = "") -> None:
+    app.include_router(router, prefix=prefix)
+    app.add_event_handler("startup", _startup)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="IMG2VID Service (SVD Img2Vid)", version="0.1.0")
+    register_app(app)
+    return app
+
+
+app = create_app()
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("services.img2vid.main:app", host="0.0.0.0", port=8003, reload=False)
+    uvicorn.run("model.services.img2vid:app", host="0.0.0.0", port=8003, reload=False)

@@ -1,20 +1,17 @@
-"""
-FastAPI wrapper around Ollama (Qwen2.5-0.5B) to generate storyboard JSON.
-"""
+"""FastAPI LLM storyboard service backed by Ollama (Qwen2.5-0.5B by default)."""
 
 import json
 import os
 from typing import List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+router = APIRouter()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:0.5b")
-
-app = FastAPI(title="LLM Storyboard Service", version="0.1.0")
 
 
 class StoryboardRequest(BaseModel):
@@ -80,8 +77,14 @@ async def call_ollama(req: StoryboardRequest) -> List[StoryboardItem]:
     storyboard = parsed.get("storyboard")
     if not storyboard or not isinstance(storyboard, list):
         raise HTTPException(status_code=502, detail="LLM output missing storyboard list")
-    sanitized = []
-    for idx, item in enumerate(storyboard, start=1):
+    sanitized: List[StoryboardItem] = []
+    for idx, raw in enumerate(storyboard, start=1):
+        if isinstance(raw, dict):
+            item = raw
+        elif isinstance(raw, list) and raw and isinstance(raw[0], dict):
+            item = raw[0]
+        else:
+            item = {}
         normalized = {
             "scene_id": item.get("scene_id") or f"s{idx}",
             "title": item.get("title") or f"Scene {idx}",
@@ -93,27 +96,37 @@ async def call_ollama(req: StoryboardRequest) -> List[StoryboardItem]:
             sanitized.append(StoryboardItem(**normalized))
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"LLM output schema error: {exc}") from exc
-    items = sanitized
-    return items
+    return sanitized
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     return {"status": "ok", "model": LLM_MODEL, "ollama": OLLAMA_HOST}
 
 
-@app.post("/storyboard", response_model=StoryboardResponse)
+@router.post("/storyboard", response_model=StoryboardResponse)
 async def generate_storyboard(req: StoryboardRequest):
     items = await call_ollama(req)
-    # 保底补全 scene_id 顺序
     for idx, item in enumerate(items, start=1):
         if not item.scene_id:
             item.scene_id = f"s{idx}"
     return {"storyboard": items}
 
 
-# 便于 `python services/llm/main.py` 直接运行
+def register_app(app: FastAPI, prefix: str = "") -> None:
+    app.include_router(router, prefix=prefix)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="LLM Storyboard Service", version="0.1.0")
+    register_app(app)
+    return app
+
+
+app = create_app()
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("services.llm.main:app", host="0.0.0.0", port=8001, reload=False)
+    uvicorn.run("model.services.llm:app", host="0.0.0.0", port=8001, reload=False)

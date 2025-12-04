@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-diffusers
-transformers
-accelerate
-safetensors

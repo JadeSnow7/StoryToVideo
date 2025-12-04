@@ -1,6 +1,4 @@
-"""
-FastAPI TTS service using local CosyVoice2 models (bypassing ModelScope pipeline).
-"""
+"""FastAPI TTS service using local CosyVoice2 models."""
 
 import os
 import sys
@@ -11,29 +9,28 @@ from typing import List, Optional
 
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from model.services.utils import resolve_project_root
 
-# Ensure local CosyVoice repo is importable
-ROOT = Path(__file__).resolve().parents[2]  # repo root
-COSYVOICE_ROOT = ROOT / "CosyVoice"
+router = APIRouter()
+
+PROJECT_ROOT = resolve_project_root()
+COSYVOICE_ROOT = PROJECT_ROOT / "CosyVoice"
 if COSYVOICE_ROOT.exists() and str(COSYVOICE_ROOT) not in sys.path:
     sys.path.insert(0, str(COSYVOICE_ROOT))
 
 from cosyvoice.cli.cosyvoice import CosyVoice2  # type: ignore  # noqa: E402
 
-
 MODEL_ID = os.getenv(
     "MODEL_ID",
-    str(ROOT / "pretrained_models" / "CosyVoice2-0.5B" / "iic" / "CosyVoice2-0___5B"),
+    str(PROJECT_ROOT / "pretrained_models" / "CosyVoice2-0.5B" / "iic" / "CosyVoice2-0___5B"),
 )
 DEVICE = os.getenv("DEVICE", "cuda")
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "data/audio"))
-ZERO_SHOT_AUDIO = ROOT / "CosyVoice" / "asset" / "zero_shot_prompt.wav"
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/audio"))
+ZERO_SHOT_AUDIO = PROJECT_ROOT / "CosyVoice" / "asset" / "zero_shot_prompt.wav"
 ZERO_SHOT_TEXT = "希望你以后能够做的比我还好呦。"
 ZERO_SHOT_ID = "zero_shot_demo"
-
-app = FastAPI(title="TTS Service (CosyVoice2 local)", version="0.2.0")
 
 voice_model: Optional[CosyVoice2] = None
 default_speaker: Optional[str] = None
@@ -74,7 +71,6 @@ def load_voice_model():
     if not model_path.exists():
         raise RuntimeError(f"MODEL_ID path not found: {model_path}")
     voice_model = CosyVoice2(str(model_path), load_jit=False, load_trt=False, fp16=True)
-    # pick first available speaker if not provided later
     try:
         spks = voice_model.list_available_spks() or []
     except Exception:
@@ -85,7 +81,6 @@ def load_voice_model():
         if entry and "embedding" not in entry and "llm_embedding" in entry:
             entry["embedding"] = entry["llm_embedding"]
 
-    # If no speakers bundled, bootstrap a zero-shot speaker from the repo demo audio.
     if not spks and ZERO_SHOT_AUDIO.exists():
         try:
             import torchaudio
@@ -129,19 +124,21 @@ def synthesize(text: str, speaker: Optional[str], speed: float) -> (np.ndarray, 
             f"No speaker available; please provide speaker id. "
             f"Available: {available_speakers or '[]'}"
         )
-    # CosyVoice2.inference_sft yields generator; take first chunk
-    gen = voice_model.inference_sft(tts_text=text, spk_id=spk, stream=False, speed=speed)
-    audio_np = None
-    for out in gen:
-        audio_np = out["tts_speech"]
-        break
-    if audio_np is None:
-        raise RuntimeError("CosyVoice2 returned empty audio")
-    return audio_np.squeeze(), voice_model.sample_rate
+    try:
+        gen = voice_model.inference_sft(tts_text=text, spk_id=spk, stream=False, speed=speed)
+        audio_np = None
+        for out in gen:
+            audio_np = out["tts_speech"]
+            break
+        if audio_np is None:
+            raise RuntimeError("CosyVoice2 returned empty audio")
+        return audio_np.squeeze(), voice_model.sample_rate
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] TTS synthesize fallback to silence for speaker={spk}: {exc}")
+        return generate_silence(0.2)
 
 
 def generate_silence(duration_sec: float) -> (np.ndarray, int):
-    """Return a short silent clip to tolerate empty narration."""
     sr = voice_model.sample_rate if voice_model is not None else 24000
     samples = max(1, int(sr * duration_sec))
     return np.zeros(samples, dtype=np.float32), sr
@@ -157,12 +154,11 @@ def save_audio(audio: np.ndarray, sample_rate: int, scene_id: str) -> str:
     return str(path)
 
 
-@app.on_event("startup")
 async def _startup():
     load_voice_model()
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     return {
         "status": "ok",
@@ -174,7 +170,7 @@ async def health():
     }
 
 
-@app.post("/narration", response_model=NarrationResponse)
+@router.post("/narration", response_model=NarrationResponse)
 async def narration(req: NarrationRequest):
     if not req.lines:
         raise HTTPException(status_code=400, detail="lines is empty")
@@ -188,7 +184,6 @@ async def narration(req: NarrationRequest):
                 audio, sr = generate_silence(0.2)
             else:
                 audio, sr = synthesize(text, req.speaker, req.speed)
-            # override sample rate if caller forces one via resample? (not implemented; ignore)
             path = save_audio(audio, sr, line.scene_id)
             outputs.append(AudioItem(scene_id=line.scene_id, audio=path, sample_rate=sr))
         except Exception as exc:  # noqa: BLE001
@@ -196,8 +191,21 @@ async def narration(req: NarrationRequest):
     return {"audios": outputs}
 
 
-# Run directly: python services/tts/main.py
+def register_app(app: FastAPI, prefix: str = "") -> None:
+    app.include_router(router, prefix=prefix)
+    app.add_event_handler("startup", _startup)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="TTS Service (CosyVoice2 local)", version="0.2.0")
+    register_app(app)
+    return app
+
+
+app = create_app()
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("services.tts.main:app", host="0.0.0.0", port=8004, reload=False)
+    uvicorn.run("model.services.tts:app", host="0.0.0.0", port=8004, reload=False)

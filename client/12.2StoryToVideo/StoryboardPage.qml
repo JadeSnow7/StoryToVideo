@@ -14,7 +14,7 @@ Page {
     property string videoStatusMessage: ""
 
     // 基础常量：API 地址前缀
-    readonly property string apiBaseUrl: "http://119.45.124.222:8081"
+    readonly property string apiBaseUrl: "http://119.45.124.222:8080"
 
     // ----------------------------------------------------
     // 1. 接收属性 (从 CreatePage 导航时传递)
@@ -248,8 +248,17 @@ Page {
                         "Title:", shot.title,
                         "Prompt:", shot.prompt);
 
-            // 构造完整的图像 URL
-            var fullImageUrl = apiBaseUrl + shot.imagePath;
+            // 构造完整的图像 URL（优先使用服务端给出的绝对 URL）
+            var fullImageUrl = "";
+            if (shot.imageUrl && shot.imageUrl.length > 0) {
+                fullImageUrl = shot.imageUrl;
+            } else if (shot.imagePath && shot.imagePath.length > 0) {
+                if (shot.imagePath.toLowerCase().startsWith("http")) {
+                    fullImageUrl = shot.imagePath;
+                } else {
+                    fullImageUrl = apiBaseUrl + shot.imagePath;
+                }
+            }
 
             storyboardModel.append({
                 // ListModel 的键名

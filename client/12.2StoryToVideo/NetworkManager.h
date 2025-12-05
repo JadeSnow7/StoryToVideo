@@ -57,8 +57,9 @@ private slots:
 private:
     QNetworkAccessManager *m_networkManager;
 
-    const QUrl PROJECT_API_URL = QUrl("http://119.45.124.222:8081/v1/api/projects");
-    const QUrl TASK_API_BASE_URL = QUrl("http://119.45.124.222:8081/v1/api/tasks");
+    // 服务端实际运行在 8080
+    const QUrl PROJECT_API_URL = QUrl("http://119.45.124.222:8080/v1/api/projects");
+    const QUrl TASK_API_BASE_URL = QUrl("http://119.45.124.222:8080/v1/api/tasks");
 
     enum RequestType {
         CreateProjectDirect = 1,

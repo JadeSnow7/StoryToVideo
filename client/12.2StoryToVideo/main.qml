@@ -11,6 +11,9 @@ ApplicationWindow {
     width: 1024
     height: 768
     title: qsTr("故事到视频生成器")
+    Component.onCompleted: {
+        console.log("Main.qml loaded; creating StackView initial item...")
+    }
 
     // --- 核心导航结构：StackView ---
     // StackView 用于管理页面的堆栈，实现页面的前进(push)和后退(pop)
@@ -20,6 +23,10 @@ ApplicationWindow {
 
         // 应用程序启动时加载项目的首页，即 AssetsPage.qml\Assetsshow.qml
         initialItem: Qt.resolvedUrl("AssetsPage.qml")
+
+        Component.onCompleted: {
+            console.log("StackView created, depth:", pageStack.depth)
+        }
 
         // 配置页面的默认属性，让子页面可以访问 StackView
         // 这样在任何子页面中，都可以通过 StackView.view.push() 来进行导航

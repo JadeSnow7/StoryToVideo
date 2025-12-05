@@ -7,10 +7,14 @@ import Qt.labs.folderlistmodel 2.1    // 用于读取本地文件目录
 Page {
     id: assetsPage
     title: "资产库"
+    Component.onCompleted: {
+        console.log("AssetsPage loaded. assetsRoot =", assetsRoot)
+    }
 
     // ⚠ 请你在这里填写资产文件夹路径，例如：
     // file:///C:/Users/admin/Desktop/Assert/
-    property string assetsRoot: "file:///D:/StoryToVideoGenerator12.2/Assets/"   // 填绝对路径
+    // macOS: 改为本机存在的目录，避免无效路径阻断 UI
+    property string assetsRoot: "file:///Users/huaodong/Movies/Videos/"   // 填绝对路径
 
     // 读取资产根目录下的所有子文件夹
     FolderListModel {
@@ -140,6 +144,4 @@ Page {
         }
     }
 }
-
-
 

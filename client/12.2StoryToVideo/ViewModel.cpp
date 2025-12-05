@@ -69,33 +69,6 @@ void ViewModel::startVideoCompilation(const QString &storyId)
 {
     qDebug() << ">>> C++ 收到请求：生成视频，委托给 NetworkManager for ID:" << storyId;
 
-    // --- [DEBUG MOCK VIDEO INJECTION] ---
-    if (storyId == "proj-test-0001" || storyId.startsWith("TASK-")) {
-        qDebug() << "!!! DEBUG: Simulating finished Video Task with static resource. !!!";
-
-        QVariantMap mockResult;
-        QVariantMap taskVideo;
-
-        // 注入静态视频路径 (来自 test.sql)
-        taskVideo["path"] = "/static/tasks/123/proj-test-0001.mp4";
-        taskVideo["duration"] = "00:00:10";
-        mockResult["task_video"] = taskVideo;
-
-        // 我们需要模拟 resultData 是 TaskResult 的完整结构 (包含 resource_url)
-        mockResult["resource_url"] = "/static/tasks/123/proj-test-0001.mp4";
-        QString mockTaskId = "task-video-test-0001";
-        QVariantMap mockTaskInfo;
-        mockTaskInfo["type"] = "video";
-        mockTaskInfo["id"] = storyId; // 使用传入的 Project ID 作为标识
-        m_activeTasks.insert(mockTaskId, mockTaskInfo);
-        qDebug() << "调用结果处理函数";
-        // 直接调用结果处理函数，模拟任务 'task-video-test-0001' 完成
-        // 传递 proj-test-0001 作为 storyId (它会被 handleTaskResultReceived 内部处理)
-        handleTaskResultReceived(mockTaskId, mockResult);
-        return; // 跳过实际网络请求
-    }
-    // --- [DEBUG MOCK VIDEO INJECTION END] ---
-
     m_networkManager->generateVideoRequest(storyId);
 }
 
@@ -113,22 +86,6 @@ void ViewModel::handleTextTaskCreated(const QString &projectId, const QString &t
 {
     qDebug() << "ViewModel: 收到 Text Task ID:" << textTaskId << "，Shot Tasks Count:" << shotTaskIds.count();
 
-    // --- [DEBUG MOCK DATA INJECTION] ---
-    // 强制使用静态 Project ID 和 Text Task ID
-    qDebug() << "!!! DEBUG: Bypassing Text Task polling and using static Project ID. !!!";
-    m_projectId = "proj-test-0001"; // 注入 mock project ID
-    m_textTaskId = "task-text-test-0001"; // 注入 mock text task ID
-
-    // 直接触发获取分镜列表的 API 调用 (Stage 1 is done)
-    m_networkManager->getShotListRequest(m_projectId); // Call GET /projects/proj-test-0001/shots
-
-    // 立即返回，不启动真实 Text Task 的轮询
-    return;
-    // --- [DEBUG MOCK DATA INJECTION END] ---
-
-
-    // --- 原有代码 (如果禁用DEBUG，则运行) ---
-    /*
     m_projectId = projectId;
     m_textTaskId = textTaskId;
     m_shotTaskIds = shotTaskIds;
@@ -139,7 +96,6 @@ void ViewModel::handleTextTaskCreated(const QString &projectId, const QString &t
 
     m_activeTasks.insert(textTaskId, taskInfo);
     startPollingTimer();
-    */
 }
 
 // [修改] 阶段 1/2：处理分镜列表获取成功
@@ -149,17 +105,24 @@ void ViewModel::handleShotListReceived(const QString &projectId, const QVariantL
 
     // --- 构造完整 URL 并标准化数据结构 ---
     QVariantList processedShots;
-    const QString API_BASE_URL = "http://119.45.124.222:8081";
+    const QString API_BASE_URL = "http://119.45.124.222:8080";
 
     for (const QVariant &varShot : shots) {
         QVariantMap shotMap = varShot.toMap();
 
-        // SQL 数据中的图片路径字段名为 image_path
-        QString imagePath = shotMap["image_path"].toString();
+        // 服务端返回 camelCase: imagePath；兼容旧字段 image_path
+        QString imagePath = shotMap.value("imagePath").toString();
+        if (imagePath.isEmpty()) {
+            imagePath = shotMap.value("image_path").toString();
+        }
 
         if (!imagePath.isEmpty()) {
-            // 构造完整的 URL 并将其存入 QML 期望的 imageUrl 字段
-            shotMap["imageUrl"] = API_BASE_URL + imagePath;
+            // 若已是完整 URL，则直接使用；否则拼接 API 基址
+            if (imagePath.startsWith("http", Qt::CaseInsensitive)) {
+                shotMap["imageUrl"] = imagePath;
+            } else {
+                shotMap["imageUrl"] = API_BASE_URL + imagePath;
+            }
         }
 
         // QML ListModel 期望的键名为 'shotId', 'shotOrder', 'shotTitle' 等
@@ -332,7 +295,10 @@ void ViewModel::processImageResult(int shotId, const QVariantMap &resultData)
         return;
     }
 
-    QString qmlUrl = QString("http://119.45.124.222:8081%1").arg(imagePath);
+    QString qmlUrl = imagePath;
+    if (!qmlUrl.startsWith("http", Qt::CaseInsensitive)) {
+        qmlUrl = QString("http://119.45.124.222:8080%1").arg(imagePath);
+    }
     qDebug() << "图像重生成成功，QML URL:" << qmlUrl;
     emit imageGenerationFinished(shotId, qmlUrl);
 }
@@ -367,7 +333,10 @@ void ViewModel::processVideoResult(const QString &storyId, const QVariantMap &re
     }
 
     // 构造完整的 URL
-    QString qmlUrl = QString("http://119.45.124.222:8081%1").arg(videoPath);
+    QString qmlUrl = videoPath;
+    if (!qmlUrl.startsWith("http", Qt::CaseInsensitive)) {
+        qmlUrl = QString("http://119.45.124.222:8080%1").arg(videoPath);
+    }
 
     // 最终确认日志
     qDebug() << "视频资源 URL:" << qmlUrl;

@@ -82,9 +82,14 @@ def _make_shot(project_id: str, order: int, shot_id: Optional[str] = None, title
         "title": title or f"Shot {order}",
         "description": "",
         "prompt": prompt or "",
+        "negativePrompt": "",
+        "narration": "",
+        "bgm": "",
         "status": "created",
         "imagePath": "",
         "audioPath": "",
+        "videoPath": "",
+        "duration": 0.0,
         "transition": transition or "",
         "createdAt": now,
         "updatedAt": now,
@@ -161,6 +166,26 @@ class TaskResult(BaseModel):
     task_shots: TaskShotsResult = Field(default_factory=TaskShotsResult)
     task_audio: TaskAudioResult = Field(default_factory=TaskAudioResult)
     task_video: TaskVideoResult = Field(default_factory=TaskVideoResult)
+
+
+class ShotSchema(BaseModel):
+    id: str
+    projectId: str
+    order: int
+    title: str
+    description: str = ""
+    prompt: str = ""
+    negativePrompt: str = ""
+    narration: str = ""
+    bgm: str = ""
+    status: str = "created"
+    imagePath: str = ""
+    audioPath: str = ""
+    videoPath: str = ""
+    duration: float = 0.0
+    transition: str = ""
+    createdAt: str
+    updatedAt: str
 
 
 # Schema matching Task in provided OpenAPI (response/GET)
@@ -1130,6 +1155,36 @@ def _recent_task_for_project(project_id: str) -> Dict:
     }
 
 
+def _storyboard_to_shots(project_id: str, storyboard: List[Dict]) -> List[Dict]:
+    """Convert LLM storyboard items into shot schema aligned with gin-server."""
+    shots: List[Dict] = []
+    for idx, scene in enumerate(storyboard):
+        shot_id = scene.get("scene_id") or scene.get("id") or str(uuid.uuid4())
+        now = _now_iso()
+        shots.append(
+            {
+                "id": shot_id,
+                "projectId": project_id,
+                "order": idx + 1,
+                "title": scene.get("title") or f"Shot {idx+1}",
+                "description": scene.get("description") or "",
+                "prompt": scene.get("prompt") or "",
+                "negativePrompt": scene.get("negativePrompt") or "",
+                "narration": scene.get("narration") or scene.get("voiceover") or "",
+                "bgm": scene.get("bgm") or "",
+                "status": "created",
+                "imagePath": scene.get("imagePath") or "",
+                "audioPath": scene.get("audioPath") or "",
+                "videoPath": scene.get("videoPath") or "",
+                "duration": float(scene.get("duration") or 0.0),
+                "transition": scene.get("transition") or "",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+    return shots
+
+
 @app.post("/v1/api/projects")
 async def create_project(Title: Optional[str] = None, StoryText: Optional[str] = None, Style: Optional[str] = None):
     project_id = str(uuid.uuid4())
@@ -1229,12 +1284,21 @@ async def get_shot(project_id: str, shot_id: str):
     return {"shot_detail": shot}
 
 
-@app.delete("/v1/api/proejcts/{project_id}/shot/{shot_id}")
+@app.delete("/v1/api/projects/{project_id}/shots/{shot_id}")
 async def delete_shot(project_id: str, shot_id: str):
-    # Note: path spelling kept as provided in spec ("proejcts")
+    _get_or_404_project(project_id)
     shots = project_shots.get(project_id, {})
     existed = shots.pop(shot_id, None) is not None
     return {"message": "deleted" if existed else "not found", "shot_id": shot_id, "project_id": project_id}
+
+
+@app.delete("/v1/api/shots/{shot_id}")
+async def delete_shot_direct(shot_id: str):
+    for pid, shots in project_shots.items():
+        if shot_id in shots:
+            shots.pop(shot_id, None)
+            return {"message": "deleted", "shot_id": shot_id, "project_id": pid}
+    raise HTTPException(status_code=404, detail="shot not found")
 
 
 @app.post("/v1/api/projects/{project_id}/tts")

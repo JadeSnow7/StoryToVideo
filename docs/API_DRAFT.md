@@ -1,6 +1,6 @@
 # API Draft (MVP) / API 草案（MVP）
 
-Base URL: `/api` / 基础路径：`/api`
+Base URL: `/v1` / 基础路径：`/v1`
 
 ## Conventions / 约定
 - Auth: Bearer Token（后续可换 JWT/OAuth2）。/ 认证：Bearer Token。

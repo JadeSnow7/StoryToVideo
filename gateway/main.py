@@ -82,9 +82,14 @@ def _make_shot(project_id: str, order: int, shot_id: Optional[str] = None, title
         "title": title or f"Shot {order}",
         "description": "",
         "prompt": prompt or "",
+        "negativePrompt": "",
+        "narration": "",
+        "bgm": "",
         "status": "created",
         "imagePath": "",
         "audioPath": "",
+        "videoPath": "",
+        "duration": 0.0,
         "transition": transition or "",
         "createdAt": now,
         "updatedAt": now,
@@ -161,6 +166,26 @@ class TaskResult(BaseModel):
     task_shots: TaskShotsResult = Field(default_factory=TaskShotsResult)
     task_audio: TaskAudioResult = Field(default_factory=TaskAudioResult)
     task_video: TaskVideoResult = Field(default_factory=TaskVideoResult)
+
+
+class ShotSchema(BaseModel):
+    id: str
+    projectId: str
+    order: int
+    title: str
+    description: str = ""
+    prompt: str = ""
+    negativePrompt: str = ""
+    narration: str = ""
+    bgm: str = ""
+    status: str = "created"
+    imagePath: str = ""
+    audioPath: str = ""
+    videoPath: str = ""
+    duration: float = 0.0
+    transition: str = ""
+    createdAt: str
+    updatedAt: str
 
 
 # Schema matching Task in provided OpenAPI (response/GET)
@@ -354,7 +379,7 @@ def _parameters_from_task_envelope(raw: Dict) -> Dict:
         }
     )
 
-# ---- Compatible payload for /v1/api/generate (VI spec) ----
+# ---- Compatible payload for /v1/generate (VI spec) ----
 class ShotDefaults(BaseModel):
     shot_count: Optional[int] = None
     style: Optional[str] = None
@@ -851,6 +876,10 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
             if not audio_path:
                 raise RuntimeError(f"Missing audio path for scene {scene_id}")
             out_clip = TMP_DIR / f"{scene_id}_mux.mp4"
+            # Keep per-clip duration (from frames/fps) for fades and audio padding
+            clip_duration = max((clip.get("frames", clip_frames) or clip_frames) / max(req.fps, 1), 0.01)
+            fade_out_start = max(clip_duration - 0.35, 0.0)
+            vf_filter = f"format=yuv420p,fade=t=in:st=0:d=0.35,fade=t=out:st={fade_out_start:.2f}:d=0.35"
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -858,10 +887,14 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
                 clip["video"],
                 "-i",
                 audio_path,
+                "-vf",
+                vf_filter,
                 "-c:v",
-                "copy",
+                "libx264",
                 "-c:a",
                 "aac",
+                "-af",
+                "apad",
                 "-shortest",
                 str(out_clip),
             ]
@@ -915,7 +948,6 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
         total_duration_sec = round(sum(c.get("frames", clip_frames) for c in clips) / max(req.fps, 1), 2)
         final_url = _to_file_url(final_path)
         final_res = _resource(final_url, "video", task_id, meta={"duration": total_duration_sec})
-        resources.append(final_res)
         legacy["task_video"]["path"] = str(final_path)
         legacy["task_video"]["fps"] = str(req.fps)
         legacy["task_video"]["resolution"] = f"{req.width}x{req.height}"
@@ -934,7 +966,8 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
                 "resource_type": "video",
                 "resource_id": task_id,
                 "resource_url": final_url,
-                "resources": resources,
+                # Only return the final video in response; other assets remain accessible via their file URLs.
+                "resources": [final_res],
                 "legacy": legacy,
             },
             finishedAt=datetime.utcnow().isoformat(),
@@ -982,7 +1015,7 @@ async def render(req: RenderRequest, background_tasks: BackgroundTasks):
 
 
 @app.post("/v1/generate", response_model=RenderResponse, tags=["v1"])
-@app.post("/v1/api/generate", response_model=RenderResponse, include_in_schema=False) # Alias for backward compatibility
+@app.post("/v1/generate", response_model=RenderResponse, include_in_schema=False) # Alias for backward compatibility
 async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
     params = req.parameters if req.parameters is not None else GenerateParameters()
     shot_defaults = params.shot_defaults or ShotDefaults()
@@ -993,7 +1026,6 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
     # Map incoming payload to internal RenderRequest
     story = shot_defaults.story_text or shot.prompt or req.message or "story"
     style = shot_defaults.style or ""
-    scenes = shot_defaults.shot_count or 1
     prompt_text = shot.prompt or shot_defaults.story_text or req.message or story
 
     def _to_int(val: Optional[str], default: int) -> int:
@@ -1002,9 +1034,14 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
         except Exception:
             return default
 
-    width = _to_int(shot.image_width, 768)
-    height = _to_int(shot.image_height, 512)
-    fps = video.fps or 12
+    def _clamp_int(val: Optional[int], default: int, min_val: int, max_val: int) -> int:
+        num = _to_int(val, default)
+        return max(min_val, min(max_val, num))
+
+    scenes = _clamp_int(shot_defaults.shot_count, 1, 1, 20)
+    width = _clamp_int(shot.image_width, 768, 256, 2048)
+    height = _clamp_int(shot.image_height, 512, 256, 2048)
+    fps = _clamp_int(video.fps, 12, 4, 30)
     clip_seconds = 5.0
     frames = max(int(fps * clip_seconds), 8)
     render_req = RenderRequest(
@@ -1024,6 +1061,11 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
     normalized_params = _parameters_from_generate(params, shot_defaults, shot, video, tts)
+    normalized_params["shot"]["shot_count"] = scenes
+    normalized_params["shot"]["image_width"] = width
+    normalized_params["shot"]["image_height"] = height
+    normalized_params["video"]["fps"] = str(fps)
+    normalized_params["video"]["resolution"] = f"{width}x{height}"
     tasks[task_id] = TaskState(
         id=task_id,
         project_id=req.project_id,
@@ -1071,7 +1113,7 @@ async def task_stream(task_id: str):
     return StreamingResponse(_task_event_stream(task_id), media_type="text/event-stream")
 
 # Spec-compatible task query
-@app.get("/v1/api/tasks/{task_id}")
+@app.get("/v1/tasks/{task_id}")
 async def task_status_v1(task_id: str):
     state = tasks.get(task_id)
     if not state:
@@ -1080,7 +1122,7 @@ async def task_status_v1(task_id: str):
 
 
 @app.get("/v1/jobs/{job_id}", response_model=TaskSchema)
-@app.get("/v1/api/jobs/{job_id}", response_model=TaskSchema, include_in_schema=False) # Alias
+@app.get("/v1/jobs/{job_id}", response_model=TaskSchema, include_in_schema=False) # Alias
 async def job_status(job_id: str):
     state = tasks.get(job_id)
     if not state:
@@ -1088,7 +1130,7 @@ async def job_status(job_id: str):
     return _as_task_schema(state)
 
 @app.delete("/v1/jobs/{job_id}")
-@app.delete("/v1/api/jobs/{job_id}", include_in_schema=False) # Alias
+@app.delete("/v1/jobs/{job_id}", include_in_schema=False) # Alias
 async def stop_job(job_id: str):
     state = tasks.get(job_id)
     if not state:
@@ -1130,7 +1172,37 @@ def _recent_task_for_project(project_id: str) -> Dict:
     }
 
 
-@app.post("/v1/api/projects")
+def _storyboard_to_shots(project_id: str, storyboard: List[Dict]) -> List[Dict]:
+    """Convert LLM storyboard items into shot schema aligned with gin-server."""
+    shots: List[Dict] = []
+    for idx, scene in enumerate(storyboard):
+        shot_id = scene.get("scene_id") or scene.get("id") or str(uuid.uuid4())
+        now = _now_iso()
+        shots.append(
+            {
+                "id": shot_id,
+                "projectId": project_id,
+                "order": idx + 1,
+                "title": scene.get("title") or f"Shot {idx+1}",
+                "description": scene.get("description") or "",
+                "prompt": scene.get("prompt") or "",
+                "negativePrompt": scene.get("negativePrompt") or "",
+                "narration": scene.get("narration") or scene.get("voiceover") or "",
+                "bgm": scene.get("bgm") or "",
+                "status": "created",
+                "imagePath": scene.get("imagePath") or "",
+                "audioPath": scene.get("audioPath") or "",
+                "videoPath": scene.get("videoPath") or "",
+                "duration": float(scene.get("duration") or 0.0),
+                "transition": scene.get("transition") or "",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+    return shots
+
+
+@app.post("/v1/projects")
 async def create_project(Title: Optional[str] = None, StoryText: Optional[str] = None, Style: Optional[str] = None):
     project_id = str(uuid.uuid4())
     now = _now_iso()
@@ -1155,12 +1227,38 @@ async def create_project(Title: Optional[str] = None, StoryText: Optional[str] =
         shot = _make_shot(project_id, i + 1)
         shots[shot["id"]] = shot
     project_shots[project_id] = shots
+
+    # 创建一个同步完成的分镜任务，便于客户端轮询 /v1/tasks/{id}
+    storyboard_task_id = str(uuid.uuid4())
+    shot_list = list(shots.values())
+    task_result = _default_result()
+    task_result["resource_type"] = "storyboard"
+    task_result["resource_id"] = project_id
+    task_result["legacy"]["task_shots"]["generated_shots"] = shot_list
+    task_result["legacy"]["task_shots"]["total_shots"] = len(shot_list)
+    task_result["legacy"]["task_shots"]["total_time"] = 0.0
+
+    tasks[storyboard_task_id] = TaskState(
+        id=storyboard_task_id,
+        project_id=project_id,
+        type=TASK_TYPE_STORYBOARD,
+        status=TASK_STATUS_FINISHED,
+        progress=100,
+        message="storyboard ready",
+        parameters=_default_parameters(),
+        result=task_result,
+        error="",
+        startedAt=now,
+        finishedAt=now,
+        createdAt=now,
+        updatedAt=now,
+    )
+
     shot_task_ids = [str(uuid.uuid4()) for _ in range(shot_count)]
-    text_task_id = str(uuid.uuid4())
-    return {"project_id": project_id, "shot_task_ids": shot_task_ids, "text_task_id": text_task_id}
+    return {"project_id": project_id, "shot_task_ids": shot_task_ids, "text_task_id": storyboard_task_id}
 
 
-@app.put("/v1/api/projects/{project_id}")
+@app.put("/v1/projects/{project_id}")
 async def update_project(project_id: str, Title: Optional[str] = None, Description: Optional[str] = None):
     project = _get_or_404_project(project_id)
     if Title is not None:
@@ -1172,7 +1270,7 @@ async def update_project(project_id: str, Title: Optional[str] = None, Descripti
     return {"id": project_id, "updateAT": project["updatedAt"]}
 
 
-@app.delete("/v1/api/projects/{project_id}")
+@app.delete("/v1/projects/{project_id}")
 async def delete_project(project_id: str):
     deleted = project_id in projects
     projects.pop(project_id, None)
@@ -1180,7 +1278,7 @@ async def delete_project(project_id: str):
     return {"success": deleted, "deleteAt": _now_iso(), "message": "deleted" if deleted else "not found"}
 
 
-@app.get("/v1/api/projects/{project_id}")
+@app.get("/v1/projects/{project_id}")
 async def get_project(project_id: str):
     project = _get_or_404_project(project_id)
     shots = list(project_shots.get(project_id, {}).values()) or None
@@ -1194,14 +1292,14 @@ async def get_project(project_id: str):
     }
 
 
-@app.get("/v1/api/projects/{project_id}/shots")
+@app.get("/v1/projects/{project_id}/shots")
 async def list_shots(project_id: str):
     _get_or_404_project(project_id)
     shots = list(project_shots.get(project_id, {}).values())
     return {"project_id": project_id, "total_shots": len(shots), "shots": shots}
 
 
-@app.post("/v1/api/projects/{project_id}/shots/{shot_id}")
+@app.post("/v1/projects/{project_id}/shots/{shot_id}")
 async def update_shot(project_id: str, shot_id: str, title: Optional[str] = None, prompt: Optional[str] = None, transition: Optional[str] = None):
     _get_or_404_project(project_id)
     shots = project_shots[project_id]
@@ -1220,7 +1318,7 @@ async def update_shot(project_id: str, shot_id: str, title: Optional[str] = None
     return {"shot_id": shot_id, "task_id": task_id, "message": "updated"}
 
 
-@app.get("/v1/api/projects/{project_id}/shots/{shot_id}")
+@app.get("/v1/projects/{project_id}/shots/{shot_id}")
 async def get_shot(project_id: str, shot_id: str):
     _get_or_404_project(project_id)
     shot = project_shots[project_id].get(shot_id)
@@ -1229,22 +1327,31 @@ async def get_shot(project_id: str, shot_id: str):
     return {"shot_detail": shot}
 
 
-@app.delete("/v1/api/proejcts/{project_id}/shot/{shot_id}")
+@app.delete("/v1/projects/{project_id}/shots/{shot_id}")
 async def delete_shot(project_id: str, shot_id: str):
-    # Note: path spelling kept as provided in spec ("proejcts")
+    _get_or_404_project(project_id)
     shots = project_shots.get(project_id, {})
     existed = shots.pop(shot_id, None) is not None
     return {"message": "deleted" if existed else "not found", "shot_id": shot_id, "project_id": project_id}
 
 
-@app.post("/v1/api/projects/{project_id}/tts")
+@app.delete("/v1/shots/{shot_id}")
+async def delete_shot_direct(shot_id: str):
+    for pid, shots in project_shots.items():
+        if shot_id in shots:
+            shots.pop(shot_id, None)
+            return {"message": "deleted", "shot_id": shot_id, "project_id": pid}
+    raise HTTPException(status_code=404, detail="shot not found")
+
+
+@app.post("/v1/projects/{project_id}/tts")
 async def project_tts(project_id: str):
     _get_or_404_project(project_id)
     task_id = str(uuid.uuid4())
     return {"task_id": task_id, "message": "accepted", "project_id": project_id}
 
 
-@app.post("/v1/api/projects/{project_id}/video")
+@app.post("/v1/projects/{project_id}/video")
 async def project_video(project_id: str):
     _get_or_404_project(project_id)
     task_id = str(uuid.uuid4())
@@ -1253,6 +1360,13 @@ async def project_video(project_id: str):
 
 # CLI entry: uvicorn gateway.main:app --host 0.0.0.0 --port 8000
 if __name__ == "__main__":  # pragma: no cover
+    import argparse
     import uvicorn
 
-    uvicorn.run("gateway.main:app", host="0.0.0.0", port=8000, reload=False)
+    parser = argparse.ArgumentParser(description="StoryToVideo Gateway server")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host, default 0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000, help="Bind port, default 8000")
+    parser.add_argument("--reload", action="store_true", help="Enable uvicorn reload")
+    cli_args = parser.parse_args()
+
+    uvicorn.run(app, host=cli_args.host, port=cli_args.port, reload=cli_args.reload)

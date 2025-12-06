@@ -91,49 +91,27 @@ type TTSParams struct {
 
 // TaskResult 仅保留最小资源定位信息
 type TaskResult struct {
-	ResourceType string                 `json:"resource_type"` // e.g., "image", "audio", "json"
-	ResourceId   string                 `json:"resource_id"`
-	ResourceUrl  string                 `json:"resource_url"`
+	ResourceType string `json:"resource_type"` // e.g., "image", "audio", "json"
+	ResourceId   string `json:"resource_id"`
+	ResourceUrl  string `json:"resource_url"`
+	//兼容可用版本的模型端的结果结构
+	TaskShots *TaskShotsResult `json:"task_shots,omitempty"`
+	TaskVideo *TaskVideoResult `json:"task_video,omitempty"`
 }
 
-// 实现 driver.Valuer 接口: Go Struct -> JSON String (存入数据库)
-func (p TaskParameters) Value() (driver.Value, error) {
-	return json.Marshal(p)
-}
-
-// 实现 sql.Scanner 接口: JSON String -> Go Struct (从数据库读取)
-func (p *TaskParameters) Scan(value interface{}) error {
-	if value == nil {
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return errors.New(fmt.Sprint("Failed to unmarshal JSONB value:", value))
-	}
-	return json.Unmarshal(bytes, p)
-}
-
-// 实现 driver.Valuer 接口
-func (r TaskResult) Value() (driver.Value, error) {
-	return json.Marshal(r)
-}
-
-// 实现 sql.Scanner 接口
-func (r *TaskResult) Scan(value interface{}) error {
-	if value == nil {
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return errors.New(fmt.Sprint("Failed to unmarshal JSONB value:", value))
-	}
-	return json.Unmarshal(bytes, r)
+type GeneratedShot struct {
+	SceneId   string  `json:"scene_id"`
+	Title     string  `json:"title"`
+	Prompt    string  `json:"prompt"`
+	Narration string  `json:"narration"`
+	Bgm       *string `json:"bgm"`
+	Path      string  `json:"path"`
 }
 
 type TaskShotsResult struct {
-	GeneratedShots []Shot  `json:"generated_shots"`
-	TotalShots     int     `json:"total_shots"`
-	TotalTime      float64 `json:"total_time"`
+	GeneratedShots []GeneratedShot `json:"generated_shots"`
+	TotalShots     int             `json:"total_shots"`
+	TotalTime      float64         `json:"total_time"`
 }
 
 type TaskVideoResult struct {
@@ -172,6 +150,40 @@ func GetTaskByIDGorm(db *gorm.DB, taskID string) (*Task, error) {
 		return nil, err
 	}
 	return &task, nil
+}
+
+// 实现 driver.Valuer 接口: Go Struct -> JSON String (存入数据库)
+func (p TaskParameters) Value() (driver.Value, error) {
+	return json.Marshal(p)
+}
+
+// 实现 sql.Scanner 接口: JSON String -> Go Struct (从数据库读取)
+func (p *TaskParameters) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return errors.New(fmt.Sprint("Failed to unmarshal JSONB value:", value))
+	}
+	return json.Unmarshal(bytes, p)
+}
+
+// 实现 driver.Valuer 接口
+func (r TaskResult) Value() (driver.Value, error) {
+	return json.Marshal(r)
+}
+
+// 实现 sql.Scanner 接口
+func (r *TaskResult) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return errors.New(fmt.Sprint("Failed to unmarshal JSONB value:", value))
+	}
+	return json.Unmarshal(bytes, r)
 }
 
 // 强制指定表名为 "task" (解决 Error 1146 表不存在的问题)

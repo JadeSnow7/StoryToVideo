@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"StoryToVideo-server/config"
@@ -28,7 +29,7 @@ func InitMinIO() {
 	if err != nil {
 		log.Fatalf("MinIO 初始化失败: %v", err)
 	}
-    log.Println("MinIO 连接成功")
+	log.Println("MinIO 连接成功")
 }
 
 // UploadVideo 上传本地视频文件到 MinIO，返回可访问的 URL
@@ -37,17 +38,17 @@ func UploadVideo(localPath string, taskID string) (string, error) {
 	cfg := config.AppConfig.MinIO
 	bucketName := cfg.Bucket
 
-    // 自动创建 Bucket
+	// 自动创建 Bucket
 	exists, err := MinioClient.BucketExists(ctx, bucketName)
 	if err == nil && !exists {
 		MinioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
 	}
 
-    // 生成云端文件名，例如: tasks/123-abc/output.mp4
+	// 生成云端文件名，例如: tasks/123-abc/output.mp4
 	objectName := fmt.Sprintf("tasks/%s/%s", taskID, filepath.Base(localPath))
 	contentType := "video/mp4"
 
-    // 执行上传
+	// 执行上传
 	_, err = MinioClient.FPutObject(ctx, bucketName, objectName, localPath, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
@@ -57,15 +58,15 @@ func UploadVideo(localPath string, taskID string) (string, error) {
 
 	expiry := time.Hour * 24
 	reqParams := make(url.Values)
-    // 如果需要强制下载
-    // reqParams.Set("response-content-disposition", "attachment; filename=\""+filepath.Base(localPath)+"\"")
+	// 如果需要强制下载
+	// reqParams.Set("response-content-disposition", "attachment; filename=\""+filepath.Base(localPath)+"\"")
 
-    presignedURL, err := MinioClient.PresignedGetObject(ctx, bucketName, objectName, expiry, reqParams)
-    if err != nil {
-        return "", fmt.Errorf("生成签名 URL 失败: %w", err)
-    }
+	presignedURL, err := MinioClient.PresignedGetObject(ctx, bucketName, objectName, expiry, reqParams)
+	if err != nil {
+		return "", fmt.Errorf("生成签名 URL 失败: %w", err)
+	}
 
-    return presignedURL.String(), nil // 修改这里：返回 presignedURL.String()
+	return presignedURL.String(), nil // 修改这里：返回 presignedURL.String()
 }
 
 // UploadToMinIO 通用上传函数，从 io.Reader 上传到 MinIO，返回可访问的 URL
@@ -77,7 +78,23 @@ func UploadToMinIO(reader io.Reader, objectName string, size int64) (string, err
 	ctx := context.Background()
 	cfg := config.AppConfig.MinIO
 	bucketName := cfg.Bucket
-
+	// ==== 新增：对象名净化与校验 ====
+	if objectName == "" {
+		return "", fmt.Errorf("invalid object name: empty")
+	}
+	// 去掉前导斜杠，替换 windows 反斜杠
+	objectName = strings.TrimLeft(objectName, "/")
+	objectName = strings.ReplaceAll(objectName, "\\", "/")
+	// 拒绝包含 URL scheme（避免把完整 URL 作为 object name）
+	if strings.Contains(objectName, "://") {
+		return "", fmt.Errorf("invalid object name: contains URL scheme")
+	}
+	// 禁止控制字符
+	for i := 0; i < len(objectName); i++ {
+		if objectName[i] < 32 {
+			return "", fmt.Errorf("invalid object name: contains control characters")
+		}
+	}
 	// 确保 Bucket 存在
 	exists, err := MinioClient.BucketExists(ctx, bucketName)
 	if err != nil {
@@ -110,17 +127,22 @@ func UploadToMinIO(reader io.Reader, objectName string, size int64) (string, err
 	}
 
 	// 上传文件
+	// _, err = MinioClient.PutObject(ctx, bucketName, objectName, reader, size, minio.PutObjectOptions{
+	// 	ContentType: contentType,
+	// })
+	// if err != nil {
+	// 	return "", fmt.Errorf("上传到 MinIO 失败: %w", err)
+	// }
 	_, err = MinioClient.PutObject(ctx, bucketName, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	if err != nil {
 		return "", fmt.Errorf("上传到 MinIO 失败: %w", err)
 	}
-
 	// 生成预签名 URL（24小时有效期）
 	expiry := time.Hour * 72
 	reqParams := make(url.Values)
-	
+
 	presignedURL, err := MinioClient.PresignedGetObject(ctx, bucketName, objectName, expiry, reqParams)
 	if err != nil {
 		return "", fmt.Errorf("生成签名 URL 失败: %w", err)

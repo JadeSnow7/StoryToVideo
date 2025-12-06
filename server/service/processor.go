@@ -1,4 +1,3 @@
-// ...existing code...
 package service
 
 import (
@@ -9,12 +8,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"StoryToVideo-server/config"
 	"StoryToVideo-server/models"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"gorm.io/gorm"
@@ -94,6 +96,11 @@ func NewProcessor(db *gorm.DB) *Processor {
 
 // StartProcessor 启动任务消费者
 func (p *Processor) StartProcessor(concurrency int) {
+	// 启动前清理旧任务
+	if err := p.CleanupStaleTasks(); err != nil {
+		log.Printf("[Warning] 清理旧任务失败: %v", err)
+	}
+
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{
 			Addr:     config.AppConfig.Redis.Addr,
@@ -115,6 +122,76 @@ func (p *Processor) StartProcessor(concurrency int) {
 			log.Fatalf("could not run server: %v", err)
 		}
 	}()
+}
+
+// CleanupStaleTasks 清理启动前遗留的任务（Redis 队列 + 数据库状态）
+func (p *Processor) CleanupStaleTasks() error {
+	log.Println("正在清理遗留任务...")
+
+	// 1. 清理 Redis 队列中的任务
+	if err := p.flushRedisQueues(); err != nil {
+		log.Printf("[Warning] 清理 Redis 队列失败: %v", err)
+	}
+
+	// 2. 将数据库中 pending/processing 的任务标记为 cancelled
+	result := p.DB.Model(&models.Task{}).
+		Where("status IN ?", []string{models.TaskStatusPending, models.TaskStatusProcessing}).
+		Updates(map[string]interface{}{
+			"status":      models.TaskStatusCancelled,
+			"error":       "服务重启，任务已取消",
+			"finished_at": time.Now(),
+			"updated_at":  time.Now(),
+		})
+
+	if result.Error != nil {
+		return fmt.Errorf("更新数据库任务状态失败: %v", result.Error)
+	}
+
+	log.Printf("已取消 %d 个遗留任务", result.RowsAffected)
+	return nil
+}
+
+// flushRedisQueues 清空 Asynq 使用的 Redis 队列
+func (p *Processor) flushRedisQueues() error {
+	ctx := context.Background()
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     config.AppConfig.Redis.Addr,
+		Password: config.AppConfig.Redis.Password,
+		DB:       0,
+	})
+	defer rdb.Close()
+
+	// Asynq 使用的队列 key 模式
+	// 参考: https://github.com/hibiken/asynq/wiki/Queue-Names
+	queueKeys := []string{
+		"asynq:{default}:pending",
+		"asynq:{default}:active",
+		"asynq:{default}:scheduled",
+		"asynq:{default}:retry",
+		"asynq:{default}:archived",
+		"asynq:{default}:completed",
+	}
+
+	for _, key := range queueKeys {
+		deleted, err := rdb.Del(ctx, key).Result()
+		if err != nil {
+			log.Printf("[Warning] 删除 %s 失败: %v", key, err)
+		} else if deleted > 0 {
+			log.Printf("已清理队列: %s", key)
+		}
+	}
+
+	// 清理任务详情（可选，如果需要完全清理）
+	// 这会删除所有以 asynq: 开头的 key
+	iter := rdb.Scan(ctx, 0, "asynq:*", 0).Iterator()
+	for iter.Next(ctx) {
+		if err := rdb.Del(ctx, iter.Val()).Err(); err != nil {
+			log.Printf("[Warning] 删除 %s 失败: %v", iter.Val(), err)
+		}
+	}
+
+	return iter.Err()
 }
 
 // HandleGenerateTask 核心处理逻辑
@@ -187,10 +264,7 @@ func (p *Processor) HandleGenerateTask(ctx context.Context, t *asynq.Task) error
 		processingErr = p.handleTTSResult(shotId, taskResult)
 
 	case models.TaskTypeVideoGen: // 图 -> 视频
-		shotId := task.ShotId
-		if shotId == "" && task.Parameters.Shot != nil {
-			shotId = task.Parameters.Shot.ShotId
-		}
+		shotId := task.Parameters.Shot.ShotId
 		processingErr = p.handleVideoResult(shotId, taskResult)
 
 	default:
@@ -202,11 +276,84 @@ func (p *Processor) HandleGenerateTask(ctx context.Context, t *asynq.Task) error
 		task.UpdateStatus(p.DB, models.TaskStatusFailed, taskResult, processingErr.Error())
 		return nil
 	}
+	// 新增：解锁依赖此任务的 blocked 任务并尝试入队
+	p.unlockDependentTasks(task.ID, task.ProjectId)
 
 	// 5. 成功完成
 	task.UpdateStatus(p.DB, models.TaskStatusSuccess, taskResult, "")
 	log.Printf("Task %s completed successfully", task.ID)
 	return nil
+	// 5. 成功完成
+	// task.UpdateStatus(p.DB, models.TaskStatusSuccess, taskResult, "")
+	// log.Printf("Task %s completed successfully", task.ID)
+	// return nil
+}
+func (p *Processor) unlockDependentTasks(completedTaskID, projectID string) {
+	rows, err := models.DB.Query(`SELECT id, parameters FROM task WHERE project_id = ? AND status = ?`, projectID, models.TaskStatusBlocked)
+	if err != nil {
+		log.Printf("unlockDependentTasks: query blocked tasks failed: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tid string
+		var paramsBytes []byte
+		if err := rows.Scan(&tid, &paramsBytes); err != nil {
+			continue
+		}
+
+		var tp models.TaskParameters
+		if len(paramsBytes) > 0 {
+			_ = json.Unmarshal(paramsBytes, &tp)
+		}
+		if tp.DependsOn == nil || len(tp.DependsOn) == 0 {
+			continue
+		}
+
+		// 检查 completedTaskID 是否在 depends_on 中
+		contains := false
+		for _, d := range tp.DependsOn {
+			if d == completedTaskID {
+				contains = true
+				break
+			}
+		}
+		if !contains {
+			continue
+		}
+
+		// 从 depends_on 中移除 completedTaskID
+		newDeps := make([]string, 0, len(tp.DependsOn))
+		for _, d := range tp.DependsOn {
+			if d != completedTaskID {
+				newDeps = append(newDeps, d)
+			}
+		}
+		tp.DependsOn = newDeps
+
+		// 序列化回 parameters
+		newParams, _ := json.Marshal(tp)
+
+		if len(newDeps) == 0 {
+			// 所有依赖已满足：置为 pending 并入队
+			if _, err := models.DB.Exec(`UPDATE task SET parameters = ?, status = ?, updated_at = ? WHERE id = ?`, newParams, models.TaskStatusPending, time.Now(), tid); err != nil {
+				log.Printf("unlockDependentTasks: update task %s -> pending failed: %v", tid, err)
+				continue
+			}
+			log.Printf("unlockDependentTasks: task %s unlocked -> pending; enqueueing", tid)
+			if err := EnqueueTask(tid); err != nil {
+				log.Printf("unlockDependentTasks: enqueue task %s failed: %v", tid, err)
+			}
+		} else {
+			// 仍有未满足的依赖，更新 parameters 并保持 blocked
+			if _, err := models.DB.Exec(`UPDATE task SET parameters = ?, updated_at = ? WHERE id = ?`, newParams, time.Now(), tid); err != nil {
+				log.Printf("unlockDependentTasks: update task %s parameters failed: %v", tid, err)
+				continue
+			}
+			log.Printf("unlockDependentTasks: task %s still blocked (remaining deps: %d)", tid, len(newDeps))
+		}
+	}
 }
 
 // ============================================================================
@@ -217,87 +364,106 @@ func (p *Processor) HandleGenerateTask(ctx context.Context, t *asynq.Task) error
 // 保留switch结构以便未来根据 task.Type 构建不同请求体，目前均发送到 /v1/generate
 func (p *Processor) dispatchWorkerRequest(task *models.Task) (string, error) {
 	var apiPath string
-	var specificParams map[string]interface{}
+	// var specificParams map[string]interface{}
 
-	switch task.Type {
-	case models.TaskTypeStoryboard: // 故事 -> 分镜
-		var project models.Project
-		if err := p.DB.First(&project, "id = ?", task.ProjectId).Error; err != nil {
-			return "", fmt.Errorf("project not found: %v", err)
-		}
-		params := task.Parameters.ShotDefaults
-		if params == nil {
-			return "", fmt.Errorf("missing shot_defaults parameters")
-		}
+	// switch task.Type {
+	// case models.TaskTypeStoryboard: // 故事 -> 分镜
+	// 	var project models.Project
+	// 	if err := p.DB.First(&project, "id = ?", task.ProjectId).Error; err != nil {
+	// 		return "", fmt.Errorf("project not found: %v", err)
+	// 	}
+	// 	params := task.Parameters.ShotDefaults
+	// 	if params == nil {
+	// 		return "", fmt.Errorf("missing shot_defaults parameters")
+	// 	}
 
-		specificParams = map[string]interface{}{
-			"shot_count": params.ShotCount,
-			"style":      params.Style,
-			"story_text": params.StoryText,
-		}
+	// 	specificParams = map[string]interface{}{
+	// 		"shot_count": params.ShotCount,
+	// 		"style":      params.Style,
+	// 		"story_text": params.StoryText,
+	// 	}
 
-	case models.TaskTypeShotImage, "regenerate_shot":
-		// 文生图：生成关键帧
-		params := task.Parameters.Shot
-		if params == nil {
-			return "", fmt.Errorf("missing shot parameters")
-		}
+	// case models.TaskTypeShotImage, "regenerate_shot":
+	// 	// 文生图：生成关键帧
+	// 	params := task.Parameters.Shot
+	// 	if params == nil {
+	// 		return "", fmt.Errorf("missing shot parameters")
+	// 	}
 
-		specificParams = map[string]interface{}{
-			"transition":   params.Transition,
-			"shot_id":      params.ShotId,
-			"image_width":  params.ImageWidth,
-			"image_height": params.ImageHeight,
-			"prompt":       params.Prompt,
-		}
+	// 	specificParams = map[string]interface{}{
+	// 		"transition":   params.Transition,
+	// 		"shot_id":      params.ShotId,
+	// 		"image_width":  params.ImageWidth,
+	// 		"image_height": params.ImageHeight,
+	// 		"prompt":       params.Prompt,
+	// 	}
 
-	case models.TaskTypeProjectAudio:
-		// TTS 生成
-		params := task.Parameters.TTS
-		if params == nil {
-			return "", fmt.Errorf("missing tts parameters")
-		}
+	// case models.TaskTypeProjectAudio:
+	// 	// TTS 生成
+	// 	params := task.Parameters.TTS
+	// 	if params == nil {
+	// 		return "", fmt.Errorf("missing tts parameters")
+	// 	}
 
-		specificParams = map[string]interface{}{
-			"voice":       params.Voice,
-			"lang":        params.Lang,
-			"sample_rate": params.SampleRate,
-			"format":      params.Format,
-		}
+	// 	specificParams = map[string]interface{}{
+	// 		"voice":       params.Voice,
+	// 		"lang":        params.Lang,
+	// 		"sample_rate": params.SampleRate,
+	// 		"format":      params.Format,
+	// 	}
 
-	case models.TaskTypeVideoGen: // 图 -> 视频
-		parameters := task.Parameters.Video
-		if parameters == nil {
-			return "", fmt.Errorf("missing video parameters")
-		}
+	// case models.TaskTypeVideoGen: // 图 -> 视频
+	// 	parameters := task.Parameters.Video
+	// 	if parameters == nil {
+	// 		return "", fmt.Errorf("missing video parameters")
+	// 	}
 
-		shot, err := models.GetShotByIDGorm(p.DB, task.ShotId)
-		if err != nil {
-			return "", fmt.Errorf("shot not found")
-		}
-		if shot.ImagePath == "" {
-			return "", fmt.Errorf("shot has no image_path (unable to gen video)")
-		}
+	// 	shot, err := models.GetShotByIDGorm(p.DB, task.ShotId)
+	// 	if err != nil {
+	// 		return "", fmt.Errorf("shot not found")
+	// 	}
+	// 	if shot.ImagePath == "" {
+	// 		return "", fmt.Errorf("shot has no image_path (unable to gen video)")
+	// 	}
 
-		fps := 24
-		if parameters.FPS != 0 {
-			fps = parameters.FPS
-		}
+	// 	fps := 24
+	// 	if parameters.FPS != 0 {
+	// 		fps = parameters.FPS
+	// 	}
 
-		resolution := "1280x720"
-		if parameters.Resolution != "" {
-			resolution = parameters.Resolution
-		}
+	// 	resolution := "1280x720"
+	// 	if parameters.Resolution != "" {
+	// 		resolution = parameters.Resolution
+	// 	}
 
-		specificParams = map[string]interface{}{
-			"resolution": resolution,
-			"fps":        fps,
-			"format":     parameters.Format,
-			"bitrate":    parameters.Bitrate,
-		}
+	// 	specificParams = map[string]interface{}{
+	// 		"resolution": resolution,
+	// 		"fps":        fps,
+	// 		"format":     parameters.Format,
+	// 		"bitrate":    parameters.Bitrate,
+	// 	}
 
-	default:
-		return "", fmt.Errorf("unsupported task type: %s", task.Type)
+	// default:
+	// 	return "", fmt.Errorf("unsupported task type: %s", task.Type)
+	// }
+
+	specificParams := make(map[string]interface{})
+
+	if task.Parameters.ShotDefaults != nil {
+		specificParams["shot_defaults"] = task.Parameters.ShotDefaults
+	}
+	if task.Parameters.Shot != nil {
+		specificParams["shot"] = task.Parameters.Shot
+	}
+	if task.Parameters.TTS != nil {
+		specificParams["tts"] = task.Parameters.TTS
+	}
+	if task.Parameters.Video != nil {
+		specificParams["video"] = task.Parameters.Video
+	}
+	// 添加其他需要的参数，如 depends_on
+	if len(task.Parameters.DependsOn) > 0 {
+		specificParams["depends_on"] = task.Parameters.DependsOn
 	}
 
 	// 发送 HTTP 请求
@@ -319,7 +485,7 @@ func (p *Processor) dispatchWorkerRequest(task *models.Task) (string, error) {
 	}
 
 	apiPath = "/v1/generate"
-	fullURL := p.WorkerEndpoint + apiPath
+	fullURL := p.WorkerEndpoint + apiPath //
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("marshal request failed: %v", err)
@@ -479,88 +645,269 @@ func (p *Processor) pollJobResult(ctx context.Context, jobID string) (*models.Ta
 }
 
 func (p *Processor) handleStoryboardResult(projectID string, result *models.TaskResult) error {
-	if result.ResourceUrl == "" {
-		return fmt.Errorf("storyboard result missing ResourceUrl")
-	}
-
-	log.Printf("下载分镜 JSON: %s", result.ResourceUrl)
-	resp, err := http.Get(result.ResourceUrl)
-	if err != nil {
-		return fmt.Errorf("下载分镜 JSON 失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载分镜 JSON 状态码: %d", resp.StatusCode)
-	}
-	var storyboardData struct {
-		Shots []struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			Prompt      string `json:"prompt"`
-			Order       int    `json:"order,omitempty"`
-			Transition  string `json:"transition,omitempty"`
-		} `json:"shots"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&storyboardData); err != nil {
-		return fmt.Errorf("解析分镜 JSON 失败: %v", err)
-	}
-
-	if len(storyboardData.Shots) == 0 {
-		return fmt.Errorf("分镜 JSON 中没有 shots 数据")
-	}
-
 	var shotsToCreate []models.Shot
-	for i, shot := range storyboardData.Shots {
-		order := shot.Order
-		if order == 0 {
-			order = i + 1
+	if result.ResourceUrl != "" {
+		log.Printf("下载分镜 JSON: %s", result.ResourceUrl)
+		resp, err := http.Get(p.WorkerEndpoint + result.ResourceUrl) // /data
+		if err != nil {
+			return fmt.Errorf("下载分镜 JSON 失败: %v", err)
 		}
+		defer resp.Body.Close()
 
-		newShot := models.Shot{
-			ID:          uuid.NewString(),
-			ProjectId:   projectID,
-			Order:       order,
-			Title:       shot.Title,
-			Description: shot.Description,
-			Prompt:      shot.Prompt,
-			Status:      models.ShotStatusPending,
-			ImagePath:   "",
-			AudioPath:   "",
-			Transition:  shot.Transition,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("下载分镜 JSON 状态码: %d", resp.StatusCode)
 		}
-		shotsToCreate = append(shotsToCreate, newShot)
+		var storyboardItems []struct {
+			SceneId   string  `json:"scene_id"`
+			Title     string  `json:"title"`
+			Prompt    string  `json:"prompt"`
+			Narration string  `json:"narration"`
+			Bgm       *string `json:"bgm"`
+			Path      string  `json:"path,omitempty"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&storyboardItems); err != nil {
+			return fmt.Errorf("解析分镜 JSON 失败: %v", err)
+		}
+		if len(storyboardItems) == 0 {
+			return fmt.Errorf("分镜 JSON 中没有 shots 数据")
+		}
+		// 将 storyboardItems 内容记录到日志（JSON 格式，超长时截断）
+		if b, err := json.MarshalIndent(storyboardItems, "", "  "); err == nil {
+			s := string(b)
+			const maxLog = 2000
+			if len(s) > maxLog {
+				s = s[:maxLog] + "...(truncated)"
+			}
+			log.Printf("storyboardItems (%d): %s", len(storyboardItems), s)
+		} else {
+			log.Printf("无法序列化 storyboardItems: %v", err)
+		}
+		for i, shot := range storyboardItems {
+			order := i + 1
+			var audioPath string
+			if shot.Bgm != nil && *shot.Bgm != "" {
+				audioPath = *shot.Bgm
+			}
+			newShot := models.Shot{
+				ID:          uuid.NewString(),
+				ProjectId:   projectID,
+				Order:       order,
+				Title:       shot.Title,
+				Description: shot.Narration,
+				Prompt:      shot.Prompt,
+				Status:      models.ShotStatusPending,
+				ImagePath:   shot.Path,
+				AudioPath:   audioPath,
+				Transition:  "",
+				CreatedAt:   time.Now(),
+				UpdatedAt:   time.Now(),
+			}
+			shotsToCreate = append(shotsToCreate, newShot)
+		}
+	} else if result.TaskShots != nil && len(result.TaskShots.GeneratedShots) > 0 {
+		// 备选：从 task_shots.generated_shots 直接读取
+		log.Printf("从 task_shots 解析分镜数据，共 %d 个", len(result.TaskShots.GeneratedShots))
+
+		for i, shot := range result.TaskShots.GeneratedShots {
+			order := i + 1
+			newShot := models.Shot{
+				ID:          uuid.NewString(),
+				ProjectId:   projectID,
+				Order:       order,
+				Title:       shot.Title,
+				Description: shot.Narration, // 使用 narration 作为描述
+				Prompt:      shot.Prompt,
+				Status:      models.ShotStatusPending,
+				ImagePath:   shot.Path,
+				AudioPath:   "",
+				Transition:  "",
+				CreatedAt:   time.Now(),
+				UpdatedAt:   time.Now(),
+			}
+			shotsToCreate = append(shotsToCreate, newShot)
+		}
+	} else {
+		return fmt.Errorf("分镜结果为空: resource_url 和 task_shots 均无有效数据")
 	}
-
-	// 4. 批量插入数据库
+	// 批量插入数据库
 	if len(shotsToCreate) > 0 {
 		if err := models.BatchCreateShots(p.DB, shotsToCreate); err != nil {
 			return fmt.Errorf("批量创建分镜失败: %v", err)
 		}
 	}
+	log.Printf("[handleStoryboardResult] Worker 返回了 %d 个分镜", len(shotsToCreate))
+
 	log.Printf("Successfully created %d shots for project %s", len(shotsToCreate), projectID)
+
+	var blockedTasks []models.Task
+	if err := p.DB.Where("project_id = ? AND type = ? AND status = ?",
+		projectID, models.TaskTypeShotImage, models.TaskStatusBlocked).
+		Order("created_at ASC").
+		Find(&blockedTasks).Error; err != nil {
+		return fmt.Errorf("查询阻塞任务失败: %v", err)
+	}
+	log.Printf("[handleStoryboardResult] 预创建了 %d 个 blocked 任务", len(blockedTasks))
+	// 将 blocked 任务与 shot 一一配对
+	for i, blockedTask := range blockedTasks {
+		if i >= len(shotsToCreate) {
+			// 如果预创建的任务比实际生成的 shot 多，删除多余任务
+			log.Printf("删除多余的 blocked 任务: %s", blockedTask.ID)
+			p.DB.Delete(&blockedTask)
+			continue
+		}
+
+		shot := shotsToCreate[i]
+
+		// 更新任务：填充 ShotId 和 Prompt
+		updates := map[string]interface{}{
+			"shot_id":    shot.ID,
+			"status":     models.TaskStatusPending,
+			"message":    "分镜已生成，准备生成图片",
+			"updated_at": time.Now(),
+		}
+
+		// 更新 parameters 中的 shot 信息
+		blockedTask.Parameters.Shot = &models.ShotParams{
+			ShotId:      shot.ID,
+			Prompt:      shot.Prompt,
+			ImageWidth:  blockedTask.Parameters.Shot.ImageWidth,  // 保留原有设置
+			ImageHeight: blockedTask.Parameters.Shot.ImageHeight, // 保留原有设置
+		}
+
+		// 序列化 parameters
+		paramsBytes, err := json.Marshal(blockedTask.Parameters)
+		if err != nil {
+			log.Printf("序列化 parameters 失败: %v", err)
+			continue
+		}
+		updates["parameters"] = string(paramsBytes)
+
+		if err := p.DB.Model(&models.Task{}).Where("id = ?", blockedTask.ID).Updates(updates).Error; err != nil {
+			log.Printf("更新任务 %s 失败: %v", blockedTask.ID, err)
+			continue
+		}
+
+		// 入队执行
+		if err := EnqueueTask(blockedTask.ID); err != nil {
+			log.Printf("任务 %s 入队失败: %v", blockedTask.ID, err)
+		} else {
+			log.Printf("任务 %s 已解锁并入队，关联 Shot: %s", blockedTask.ID, shot.ID)
+		}
+	}
+
+	// 如果实际生成的 shot 比预创建的任务多，创建新任务
+	if len(shotsToCreate) > len(blockedTasks) {
+		for i := len(blockedTasks); i < len(shotsToCreate); i++ {
+			shot := shotsToCreate[i]
+			newTask := models.Task{
+				ID:        uuid.NewString(),
+				ProjectId: projectID,
+				ShotId:    shot.ID,
+				Type:      models.TaskTypeShotImage,
+				Status:    models.TaskStatusPending,
+				Progress:  0,
+				Message:   "分镜已生成，准备生成图片",
+				Parameters: models.TaskParameters{
+					Shot: &models.ShotParams{
+						ShotId:      shot.ID,
+						Prompt:      shot.Prompt,
+						ImageWidth:  "1024",
+						ImageHeight: "1024",
+					},
+				},
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+
+			if err := models.CreateTask(&newTask); err != nil {
+				log.Printf("创建额外生图任务失败: %v", err)
+				continue
+			}
+
+			if err := EnqueueTask(newTask.ID); err != nil {
+				log.Printf("额外任务 %s 入队失败: %v", newTask.ID, err)
+			} else {
+				log.Printf("创建并入队额外任务 %s，关联 Shot: %s", newTask.ID, shot.ID)
+			}
+		}
+	}
+
 	return nil
 }
 
 // 处理图像生成结果 -> 更新 ImagePath
 func (p *Processor) handleImageResult(shotID string, result *models.TaskResult) error {
-	objectName := fmt.Sprintf("shots/%s/image.png", shotID)
-	finalURL, err := processResourceToMinIO(result, objectName)
-	if err != nil {
-		return fmt.Errorf("处理图片资源失败: %v", err)
+	shotID = strings.TrimSpace(shotID)
+	// ==== 新增：基本校验与净化 ====
+	if shotID == "" {
+		return fmt.Errorf("missing shot id for image task")
+	}
+	// 替换可能的路径分隔符/非法片段，防止把完整路径或 URL 当作对象名段
+	shotID = strings.ReplaceAll(shotID, "/", "-")
+	shotID = strings.ReplaceAll(shotID, "\\", "-")
+	// 去除首尾空白后的再次检查
+	if shotID == "" {
+		return fmt.Errorf("invalid shot id after sanitization")
+	}
+	// ==== 校验结束 ====
+	var finalURL string
+	var err error
+
+	// 优先从 resource_url 获取
+	if result.ResourceUrl != "" {
+		objectName := fmt.Sprintf("shots/%s/image.png", shotID)
+		finalURL, err = processResourceToMinIO(result, objectName)
+		if err != nil {
+			return fmt.Errorf("处理图片资源失败: %v", err)
+		}
+	} else {
+		// 备选：从 task_shots 获取路径
+		var remotePath string
+		if result.TaskShots != nil && len(result.TaskShots.GeneratedShots) > 0 {
+			remotePath = result.TaskShots.GeneratedShots[0].Path
+		}
+
+		if remotePath == "" {
+			return fmt.Errorf("图片路径为空: resource_url 和 task_shots.path 均无有效数据")
+		}
+		downloadUrl := p.getWorkerFileUrl(remotePath)
+		log.Printf("正在从 Worker 下载图片: %s", downloadUrl)
+
+		objectName := fmt.Sprintf("shots/%s/image.png", shotID)
+		finalURL, err = downloadAndUploadToMinIO(downloadUrl, objectName)
+		if err != nil {
+			return fmt.Errorf("处理图片失败 (下载URL: %s): %v", downloadUrl, err)
+		}
 	}
 
+	result.ResourceUrl = finalURL
 	shot, err := models.GetShotByIDGorm(p.DB, shotID)
 	if err != nil {
 		return err
 	}
-	log.Printf("图片id %s上传成功: %s", shotID, finalURL)
+	shot.ImagePath = finalURL
+	if err := p.DB.Save(shot).Error; err != nil {
+		return fmt.Errorf("更新 shot 图片路径失败: %v", err)
+	}
+
+	log.Printf("图片 %s 上传成功: %s", shotID, finalURL)
+
 	return shot.UpdateImage(p.DB, finalURL)
 }
 
 func (p *Processor) handleTTSResult(shotId string, result *models.TaskResult) error {
+	shotId = strings.TrimSpace(shotId)
+	// ==== 新增：基本校验与净化 ====
+	if shotId == "" {
+		return fmt.Errorf("missing shot id for image task")
+	}
+	// 替换可能的路径分隔符/非法片段，防止把完整路径或 URL 当作对象名段
+	shotId = strings.ReplaceAll(shotId, "/", "-")
+	shotId = strings.ReplaceAll(shotId, "\\", "-")
+	// 去除首尾空白后的再次检查
+	if shotId == "" {
+		return fmt.Errorf("invalid shot id after sanitization")
+	}
 	objectName := fmt.Sprintf("shots/%s/audio.mp3", shotId)
 	finalURL, err := processResourceToMinIO(result, objectName)
 	if err != nil {
@@ -568,6 +915,7 @@ func (p *Processor) handleTTSResult(shotId string, result *models.TaskResult) er
 	}
 
 	log.Printf("音频上传成功: %s", finalURL)
+	result.ResourceUrl = finalURL
 	return p.DB.Model(&models.Shot{}).Where("id = ?", shotId).Updates(map[string]interface{}{
 		"audio_path": finalURL,
 		"updated_at": time.Now(),
@@ -576,18 +924,62 @@ func (p *Processor) handleTTSResult(shotId string, result *models.TaskResult) er
 
 // 处理视频生成结果 -> 更新 VideoUrl
 func (p *Processor) handleVideoResult(shotID string, result *models.TaskResult) error {
-	objectName := fmt.Sprintf("shots/%s/video.mp4", shotID)
-	finalURL, err := processResourceToMinIO(result, objectName)
-	if err != nil {
-		return fmt.Errorf("处理视频资源失败: %v", err)
+	var finalURL string
+	var err error
+	shotID = strings.TrimSpace(shotID)
+	// ==== 新增：基本校验与净化 ====
+	if shotID == "" {
+		return fmt.Errorf("missing shot id for image task")
 	}
+	// 替换可能的路径分隔符/非法片段，防止把完整路径或 URL 当作对象名段
+	shotID = strings.ReplaceAll(shotID, "/", "-")
+	shotID = strings.ReplaceAll(shotID, "\\", "-")
+	// 去除首尾空白后的再次检查
+	if shotID == "" {
+		return fmt.Errorf("invalid shot id after sanitization")
+	}
+	// 优先从 resource_url 获取
+	if result.ResourceUrl != "" {
+		objectName := fmt.Sprintf("shots/%s/video.mp4", shotID)
+		finalURL, err = processResourceToMinIO(result, objectName)
+		if err != nil {
+			return fmt.Errorf("处理视频资源失败: %v", err)
+		}
+	} else if result.TaskVideo != nil && result.TaskVideo.Path != "" {
+		// 备选：从 task_video 获取路径
+		downloadUrl := p.getWorkerFileUrl(result.TaskVideo.Path)
+		log.Printf("正在从 Worker 下载视频: %s", downloadUrl)
 
+		objectName := fmt.Sprintf("shots/%s/video.mp4", shotID)
+		finalURL, err = downloadAndUploadToMinIO(downloadUrl, objectName)
+		if err != nil {
+			return fmt.Errorf("处理视频失败: %v", err)
+		}
+	} else {
+		return fmt.Errorf("视频路径为空: resource_url 和 task_video.path 均无有效数据")
+	}
+	result.ResourceUrl = finalURL
 	log.Printf("视频上传成功: %s", finalURL)
 	return p.DB.Model(&models.Shot{}).Where("id = ?", shotID).Updates(map[string]interface{}{
 		"video_url":  finalURL,
 		"status":     models.ShotStatusCompleted,
 		"updated_at": time.Now(),
 	}).Error
+}
+
+func (p *Processor) getWorkerFileUrl(filePath string) string {
+	// 方案 A: 假设 Worker 提供了一个通用的下载 API
+	// 例如: http://worker-frp-addr/v1/download?path=/home/stv/...
+	baseUrl := p.WorkerEndpoint // config.yaml 中的 worker地址
+
+	// 如果是相对路径 (data/final/...)，可能需要拼接
+	// 如果是绝对路径 (/home/stv/...)，直接传给 API
+
+	// 这里使用 QueryEscape 处理路径中的特殊字符
+	return fmt.Sprintf("%s/v1/download?path=%s", baseUrl, url.QueryEscape(filePath))
+
+	// 方案 B: 如果 Worker 只是简单的静态文件服务 (例如 python -m http.server)
+	// return fmt.Sprintf("%s/%s", baseUrl, filePath)
 }
 
 // processResourceToMinIO 通用资源处理函数
@@ -600,7 +992,7 @@ func processResourceToMinIO(result *models.TaskResult, objectName string) (strin
 }
 
 func downloadAndUploadToMinIO(sourceURL, objectName string) (string, error) {
-	resp, err := http.Get(sourceURL)
+	resp, err := http.Get("http://127.0.0.1:18000" + sourceURL)
 	if err != nil {
 		return "", fmt.Errorf("download failed: %v", err)
 	}

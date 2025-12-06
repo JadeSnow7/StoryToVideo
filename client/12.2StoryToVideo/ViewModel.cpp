@@ -74,8 +74,8 @@ void ViewModel::startVideoCompilation(const QString &storyId)
 
 void ViewModel::generateShotImage(const QString &shotId, const QString &prompt, const QString &transition)
 {
-    qDebug() << ">>> C++ 收到请求：生成单张图像 Shot:" << shotId;
-    m_networkManager->updateShotRequest(shotId, prompt, transition);
+    qDebug() << ">>> C++ 收到请求：生成单张图像 Shot:" << shotId << "Project:" << m_projectId;
+    m_networkManager->updateShotRequest(m_projectId, shotId, prompt, transition);
 }
 
 

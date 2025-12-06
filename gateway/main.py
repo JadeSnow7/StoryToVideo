@@ -1305,7 +1305,7 @@ async def list_shots(project_id: str):
 
 
 @app.post("/v1/projects/{project_id}/shots/{shot_id}")
-async def update_shot(project_id: str, shot_id: str, title: Optional[str] = None, prompt: Optional[str] = None, transition: Optional[str] = None):
+async def update_shot(project_id: str, shot_id: str, background_tasks: BackgroundTasks, title: Optional[str] = None, prompt: Optional[str] = None, transition: Optional[str] = None):
     _get_or_404_project(project_id)
     shots = project_shots[project_id]
     if shot_id not in shots:
@@ -1319,7 +1319,45 @@ async def update_shot(project_id: str, shot_id: str, title: Optional[str] = None
         shot["transition"] = transition
     shot["updatedAt"] = _now_iso()
     shots[shot_id] = shot
+    
+    # 创建任务记录
     task_id = str(uuid.uuid4())
+    now = _now_iso()
+    tasks[task_id] = TaskState(
+        id=task_id,
+        project_id=project_id,
+        shot_id=shot_id,
+        type=TASK_TYPE_SHOT,
+        status=TASK_STATUS_PENDING,
+        progress=0,
+        message="shot update task created",
+        createdAt=now,
+        updatedAt=now,
+    )
+    
+    # 模拟后台处理
+    async def mock_shot_task():
+        import asyncio
+        await asyncio.sleep(1)
+        if task_id in tasks:
+            tasks[task_id].status = TASK_STATUS_PROCESSING
+            tasks[task_id].progress = 50
+            tasks[task_id].message = "generating image..."
+            tasks[task_id].updatedAt = _now_iso()
+        await asyncio.sleep(1)
+        if task_id in tasks:
+            tasks[task_id].status = TASK_STATUS_FINISHED
+            tasks[task_id].progress = 100
+            tasks[task_id].message = "shot ready"
+            tasks[task_id].result = {
+                "resource_type": "shot",
+                "resource_id": shot_id,
+                "image_url": f"/files/shots/{shot_id}.png",
+            }
+            tasks[task_id].updatedAt = _now_iso()
+            tasks[task_id].finishedAt = _now_iso()
+    
+    background_tasks.add_task(mock_shot_task)
     return {"shot_id": shot_id, "task_id": task_id, "message": "updated"}
 
 

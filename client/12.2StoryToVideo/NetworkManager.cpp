@@ -64,26 +64,21 @@ void NetworkManager::getShotListRequest(const QString &projectId)
     m_networkManager->get(request);
 }
 
-// --- 3. 任务 API 请求：更新分镜 (POST /v1/api/tasks) ---
-void NetworkManager::updateShotRequest(const QString &shotId, const QString &prompt, const QString &style)
+// --- 3. 任务 API 请求：更新分镜 (POST /v1/projects/:project_id/shots/:shot_id) ---
+void NetworkManager::updateShotRequest(const QString &projectId, const QString &shotId, const QString &prompt, const QString &style)
 {
-    qDebug() << "发送 UpdateShot 请求...";
+    // Gateway 使用 /v1/projects/{project_id}/shots/{shot_id} 来更新分镜
+    QUrl url = QUrl(PROJECT_API_URL.toString() + "/" + projectId + "/shots/" + shotId);
+    qDebug() << "发送 UpdateShot 请求 URL:" << url;
 
     QJsonObject requestJson;
-    requestJson["type"] = "updateShot"; // 假设类型为 updateShot
-    requestJson["shotId"] = shotId;
-
-    QJsonObject parameters;
-    QJsonObject shot;
-    shot["style"] = style;
-    shot["image_llm"] = prompt;
-    parameters["shot"] = shot;
-    requestJson["parameters"] = parameters;
+    requestJson["style"] = style;
+    requestJson["prompt"] = prompt;
 
     QJsonDocument doc(requestJson);
     QByteArray postData = doc.toJson(QJsonDocument::Compact);
 
-    QNetworkRequest request(TASK_API_BASE_URL);
+    QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
     request.setAttribute(RequestTypeAttribute, NetworkManager::UpdateShot);

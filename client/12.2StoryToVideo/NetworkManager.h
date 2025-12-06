@@ -24,7 +24,7 @@ public:
     void getShotListRequest(const QString &projectId);
 
     // --- 3. 任务 API 请求 (异步 / tasks API) ---
-    void updateShotRequest(const QString &shotId, const QString &prompt, const QString &style);
+    void updateShotRequest(const QString &projectId, const QString &shotId, const QString &prompt, const QString &style);
     void generateVideoRequest(const QString &projectId);
 
     // --- 4. 任务状态查询 API ---

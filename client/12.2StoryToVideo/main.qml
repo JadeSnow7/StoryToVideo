@@ -1,8 +1,8 @@
 
 // main.qml
-import QtQuick 2.6            // 兼容 Qt 5.8.0
-import QtQuick.Controls 2.1   // 兼容 Qt 5.8.0
-import QtQuick.Layouts 1.2    // 兼容 Qt 5.8.0
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 
 // ApplicationWindow 是桌面应用的主窗口
 ApplicationWindow {
@@ -11,6 +11,12 @@ ApplicationWindow {
     width: 1024
     height: 768
     title: qsTr("故事到视频生成器")
+
+    // macOS 风格配色
+    readonly property color macBackground: "#F5F5F7"
+
+    // 窗口背景色
+    color: macBackground
     Component.onCompleted: {
         console.log("Main.qml loaded; creating StackView initial item...")
     }
@@ -21,8 +27,8 @@ ApplicationWindow {
         id: pageStack // 定义 StackView 的 ID
         anchors.fill: parent
 
-        // 应用程序启动时加载项目的首页，即 AssetsPage.qml\Assetsshow.qml
-        initialItem: Qt.resolvedUrl("AssetsPage.qml")
+        // 应用程序启动时加载项目的首页
+        initialItem: "qrc:/AssetsPage.qml"
 
         Component.onCompleted: {
             console.log("StackView created, depth:", pageStack.depth)

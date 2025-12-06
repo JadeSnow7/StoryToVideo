@@ -79,3 +79,7 @@ server/log/
 # Word documents (not source code)
 *.docx
 *.pdf
+
+# FRP binaries (platform-specific)
+frp/frpc
+frp/frps

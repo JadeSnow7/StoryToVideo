@@ -72,7 +72,7 @@ void ViewModel::startVideoCompilation(const QString &storyId)
     m_networkManager->generateVideoRequest(storyId);
 }
 
-void ViewModel::generateShotImage(int shotId, const QString &prompt, const QString &transition)
+void ViewModel::generateShotImage(const QString &shotId, const QString &prompt, const QString &transition)
 {
     qDebug() << ">>> C++ 收到请求：生成单张图像 Shot:" << shotId;
     m_networkManager->updateShotRequest(shotId, prompt, transition);
@@ -179,7 +179,7 @@ void ViewModel::handleTaskResultReceived(const QString &taskId, const QVariantMa
 
         // 假设这里只处理重生成任务，因为初始分镜由 GetShotListRequest 获取
         // 传递 shotId 和 resultData
-        processImageResult(taskInfo["id"].toInt(), resultData);
+        processImageResult(taskInfo["id"].toString(), resultData);
 
     } else if (type == "video") {
         qDebug() << "DEBUG CALL CHECK: Attempting to call processVideoResult for Project:" << projectId;
@@ -191,14 +191,14 @@ void ViewModel::handleTaskResultReceived(const QString &taskId, const QVariantMa
 
 // --- 辅助函数 (其他函数保持不变) ---
 
-void ViewModel::handleTaskCreated(const QString &taskId, int shotId)
+void ViewModel::handleTaskCreated(const QString &taskId, const QString &shotId)
 {
     qDebug() << "ViewModel: 收到通用任务 Task ID:" << taskId;
 
     // 此函数主要处理分镜重生成或视频生成任务
     QVariantMap taskInfo;
 
-    if (shotId == 0) {
+    if (shotId.isEmpty()) {
         taskInfo["type"] = "video";
         taskInfo["id"] = m_projectId; // 使用当前 Project ID
     } else {
@@ -277,7 +277,7 @@ void ViewModel::processStoryboardResult(const QString &taskId, const QVariantMap
     qDebug() << "Note: processStoryboardResult 仅用于历史兼容或视频任务解析。";
 }
 
-void ViewModel::processImageResult(int shotId, const QVariantMap &resultData)
+void ViewModel::processImageResult(const QString &shotId, const QVariantMap &resultData)
 {
     // 用于分镜重生成任务完成后的处理
 

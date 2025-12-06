@@ -1,12 +1,23 @@
 // AssetsPage.qml
-import QtQuick 2.6
-import QtQuick.Controls 2.1
-import QtQuick.Layouts 1.2
-import Qt.labs.folderlistmodel 2.1    // 用于读取本地文件目录
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Qt5Compat.GraphicalEffects
+import Qt.labs.folderlistmodel    // 用于读取本地文件目录
 
 Page {
     id: assetsPage
     title: "资产库"
+
+    // macOS 风格配色 & 字体
+    readonly property color macBackground: "#F5F5F7"
+    readonly property color macCard: "#FFFFFF"
+    readonly property color macBorder: "#D1D5DB"
+    readonly property color macTextPrimary: "#0B0B0F"
+    readonly property color macTextSecondary: "#6B7280"
+    readonly property string macTitleFont: "-apple-system"
+    readonly property string macBodyFont: "-apple-system"
+
     Component.onCompleted: {
         console.log("AssetsPage loaded. assetsRoot =", assetsRoot)
     }
@@ -25,24 +36,116 @@ Page {
         showFiles: false
     }
 
-    ColumnLayout {
+    Rectangle {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 20
+        color: macBackground
 
-        // 顶部搜索 + 新建按钮（原样保留）
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 24
+            spacing: 20
+
+        // ========== 顶部导航栏 ==========
         RowLayout {
-            width: parent.width
+            Layout.fillWidth: true
+            spacing: 10
 
-            TextField {
-                Layout.fillWidth: true;
-                placeholderText: "按故事名称或生成时间筛选..."
+            Text {
+                text: qsTr("资产库")
+                font.pixelSize: 22
+                font.bold: true
+                font.family: macTitleFont
+                color: macTextPrimary
+                Layout.fillWidth: true
             }
 
             Button {
-                text: "新建故事"
+                text: "刷新"
+                font.pixelSize: 14
+                onClicked: {
+                    // 重新加载文件夹列表
+                    folderModel.folder = "";
+                    folderModel.folder = assetsRoot;
+                    console.log("资产库已刷新");
+                }
+            }
+        }
+
+        // 搜索 + 新建按钮
+        RowLayout {
+            Layout.fillWidth: true
+
+            TextField {
+                Layout.fillWidth: true
+                placeholderText: qsTr("按故事名称或生成时间筛选...")
+                leftPadding: 12
+                background: Rectangle {
+                    radius: 20
+                    color: "white"
+                    border.color: "#E0E0E0"
+                }
+            }
+
+            Button {
+                text: qsTr("+ 新建故事")
+                Layout.preferredWidth: 140
+                background: Rectangle {
+                    radius: 18
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: "#6C63FF" }
+                        GradientStop { position: 1.0; color: "#5A54E3" }
+                    }
+                }
                 onClicked: {
                     pageStack.push(Qt.resolvedUrl("CreatePage.qml"))
+                }
+            }
+        }
+
+        // 资产统计提示
+        Rectangle {
+            Layout.fillWidth: true
+            height: 70
+            radius: 14
+            color: macCard
+            border.color: macBorder
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 16
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: qsTr("可用项目")
+                        font.pixelSize: 13
+                        font.family: macBodyFont
+                        color: macTextSecondary
+                    }
+                    Text {
+                        text: folderModel.count
+                        font.pixelSize: 28
+                        font.bold: true
+                        font.family: macTitleFont
+                        color: macTextPrimary
+                    }
+                }
+
+                ColumnLayout {
+                    Text {
+                        text: qsTr("资源目录")
+                        font.pixelSize: 13
+                        font.family: macBodyFont
+                        color: macTextSecondary
+                    }
+                    Text {
+                        text: assetsRoot
+                        font.pixelSize: 14
+                        font.family: macBodyFont
+                        color: macTextPrimary
+                        elide: Text.ElideRight
+                        Layout.preferredWidth: 320
+                    }
                 }
             }
         }
@@ -50,11 +153,19 @@ Page {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "transparent"
+            radius: 18
+            color: macCard
+            border.color: macBorder
+            clip: true
 
-            Flow {
-                width: assetsPage.width - 40
-                spacing: 15
+            ScrollView {
+                anchors.fill: parent
+                contentWidth: parent.width
+
+                Flow {
+                    width: parent.width
+                    padding: 24
+                    spacing: 20
 
                 // ★ 动态读取子文件夹数量
                 Repeater {
@@ -62,11 +173,18 @@ Page {
 
                     // 不展示根目录自身（第 0 项一般是 "."）
                     delegate: Rectangle {
-                        width: 200
-                        height: 180
-                        color: "#EEEEEE"
-                        radius: 8
-                        border.color: "#CCCCCC"
+                        width: 240
+                        height: 220
+                        radius: 16
+                        color: macCard
+                        border.color: macBorder
+                        layer.enabled: true
+                        layer.effect: DropShadow {
+                            color: "#1F000000"
+                            radius: 12
+                            samples: 15
+                            verticalOffset: 6
+                        }
 
                         // 当前子文件夹的绝对路径
                         property string folderPath: folderModel.get(index, "filePath")
@@ -88,13 +206,16 @@ Page {
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: 10
+                            anchors.margins: 16
 
-                            // 缩略图区域
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 110
-                                color: "#DCDCDC"
+                                radius: 12
+                                gradient: Gradient {
+                                    GradientStop { position: 0.0; color: "#D9D9F3" }
+                                    GradientStop { position: 1.0; color: "#C3C8FF" }
+                                }
 
                                 Image {
                                     anchors.fill: parent
@@ -113,15 +234,25 @@ Page {
                                 }
                             }
 
-                            Label {
-                                text: folderPath.split("/").pop()  // 用文件夹名字当标题
+                            Text {
+                                text: folderPath.split("/").pop()
                                 font.bold: true
+                                font.pixelSize: 16
+                                font.family: macTitleFont
+                                color: macTextPrimary
                             }
 
-                            Label {
-                                text: "本地资产文件夹"
-                                font.pointSize: 9
-                                color: "#666666"
+                            Rectangle {
+                                width: 96
+                                height: 26
+                                radius: 13
+                                color: "#F0F1FF"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: qsTr("本地资产")
+                                    font.pixelSize: 12
+                                    color: "#5A54E3"
+                                }
                             }
 
                             MouseArea {
@@ -136,11 +267,27 @@ Page {
                                         videoPath: videoPath
                                     })
                                 }
+                                hoverEnabled: true
+                                onEntered: parent.border.color = "#B0B5FF"
+                                onExited: parent.border.color = "#E5E5F0"
                             }
                         }
                     }
                 }
+
+                // 空态提示
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: 40
+                    text: folderModel.count === 0 ? qsTr("未检测到资产，请先在右上角创建故事或配置 assetsRoot") : ""
+                    font.family: macBodyFont
+                    font.pixelSize: 14
+                    color: macTextSecondary
+                }
             }
+            }
+        }
         }
     }
 }

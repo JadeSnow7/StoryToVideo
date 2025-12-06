@@ -1,13 +1,22 @@
 // StoryboardPage.qml
 
-import QtQuick 2.6
-import QtQuick.Controls 2.1
-import QtQuick.Layouts 1.2
-import QtQuick.Window 2.2
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import QtQuick.Window
 
 Page {
     id: storyboardPage
     title: qsTr("故事板预览")
+
+    // macOS 风格配色 & 字体
+    readonly property color macBackground: "#F5F5F7"
+    readonly property color macCard: "#FFFFFF"
+    readonly property color macBorder: "#D1D5DB"
+    readonly property color macTextPrimary: "#0B0B0F"
+    readonly property color macTextSecondary: "#6B7280"
+    readonly property string macTitleFont: "-apple-system"
+    readonly property string macBodyFont: "-apple-system"
 
     // 状态属性：用于控制视频生成进度和按钮状态
     property bool isVideoGenerating: false
@@ -92,20 +101,66 @@ Page {
     // ----------------------------------------------------
     // 5. UI 布局
     // ----------------------------------------------------
+    Rectangle {
+        anchors.fill: parent
+        color: macBackground
+
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 15
+        anchors.margins: 20
         spacing: 15
 
-        // 顶部标题
-        Text {
-            text: qsTr("项目 ID: %1").arg(storyId.length > 0 ? storyId : "N/A")
-            font.pixelSize: 14
-            color: "gray"
+        // ========== 顶部导航栏 ==========
+        RowLayout {
             Layout.fillWidth: true
+            spacing: 10
+
+            Button {
+                text: "← 返回"
+                font.family: macBodyFont
+                background: Rectangle {
+                    radius: 10
+                    color: "transparent"
+                    border.color: macBorder
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: macTextPrimary
+                    font.pixelSize: 14
+                    font.family: macBodyFont
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: {
+                    if (!isVideoGenerating) {
+                        pageStack.pop()
+                    }
+                }
+                enabled: !isVideoGenerating
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+
+                Text {
+                    text: storyTitle.length > 0 ? storyTitle : qsTr("故事板预览")
+                    font.pixelSize: 20
+                    font.bold: true
+                    font.family: macTitleFont
+                    color: macTextPrimary
+                }
+
+                Text {
+                    text: qsTr("项目 ID: %1 · %2 个分镜").arg(storyId.length > 0 ? storyId : "N/A").arg(storyboardModel.count)
+                    font.pixelSize: 13
+                    font.family: macBodyFont
+                    color: macTextSecondary
+                }
+            }
         }
 
-        // 分镜列表 (GridView)
+        // ========== 分镜列表 (GridView) ==========
         GridView {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -119,11 +174,11 @@ Page {
 
                 Rectangle {
                     anchors.fill: parent
-                    anchors.margins: 5
-                    radius: 8
-                    border.color: "#DDDDDD"
+                    anchors.margins: 6
+                    radius: 14
+                    border.color: macBorder
                     border.width: 1
-                    color: "white"
+                    color: macCard
 
                     // 点击区域 (用于导航到 ShotDetailPage)
                     MouseArea {
@@ -180,12 +235,15 @@ Page {
                             Text {
                                 text: qsTr("分镜 %1: %2").arg(model.shotOrder).arg(model.shotTitle)
                                 font.bold: true
+                                font.family: macTitleFont
+                                color: macTextPrimary
                                 Layout.fillWidth: true
                             }
                             Text {
                                 text: model.shotDescription
                                 font.pixelSize: 12
-                                color: "darkgray"
+                                font.family: macBodyFont
+                                color: macTextSecondary
                                 Layout.maximumHeight: 40
                                 elide: Text.ElideRight
                                 wrapMode: Text.WordWrap
@@ -209,8 +267,27 @@ Page {
                 : qsTr("生成最终视频")
 
             Layout.fillWidth: true
-            Layout.preferredHeight: 40
+            Layout.preferredHeight: 44
             enabled: !isVideoGenerating && storyboardModel.count > 0 && storyId.length > 0
+            font.pixelSize: 15
+            font.bold: true
+            font.family: macBodyFont
+            background: Rectangle {
+                radius: 14
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: "#4A8BFF" }
+                    GradientStop { position: 1.0; color: "#2D6BFF" }
+                }
+            }
+            contentItem: Text {
+                text: parent.text
+                color: "white"
+                font.pixelSize: 15
+                font.bold: true
+                font.family: macBodyFont
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
             onClicked: {
                 if (!isVideoGenerating) {
                     viewModel.startVideoCompilation(storyId);
@@ -225,8 +302,11 @@ Page {
             text: videoStatusMessage
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
-            color: isVideoGenerating ? "blue" : (videoStatusMessage.includes("成功") ? "green" : "red")
+            font.family: macBodyFont
+            font.pixelSize: 13
+            color: isVideoGenerating ? "#2563EB" : (videoStatusMessage.includes("成功") ? "#34C759" : "#FF3B30")
         }
+    }
     }
 
 

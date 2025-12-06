@@ -24,7 +24,7 @@ public:
     void getShotListRequest(const QString &projectId);
 
     // --- 3. 任务 API 请求 (异步 / tasks API) ---
-    void updateShotRequest(int shotId, const QString &prompt, const QString &style);
+    void updateShotRequest(const QString &shotId, const QString &prompt, const QString &style);
     void generateVideoRequest(const QString &projectId);
 
     // --- 4. 任务状态查询 API ---
@@ -36,7 +36,7 @@ signals:
     void textTaskCreated(const QString &projectId, const QString &textTaskId, const QVariantList &shotTaskIds);
 
     // [保留] 2. 业务请求成功并返回 task_id (用于分镜重生成/视频)
-    void taskCreated(const QString &taskId, int shotId = 0);
+    void taskCreated(const QString &taskId, const QString &shotId = QString());
 
     // [保留] 3. 任务状态更新 (用于轮询)
     void taskStatusReceived(const QString &taskId, int progress, const QString &status, const QString &message);
@@ -57,9 +57,10 @@ private slots:
 private:
     QNetworkAccessManager *m_networkManager;
 
-    // 服务端实际运行在 8080
-    const QUrl PROJECT_API_URL = QUrl("http://119.45.124.222:8080/v1/api/projects");
-    const QUrl TASK_API_BASE_URL = QUrl("http://119.45.124.222:8080/v1/api/tasks");
+    // 通过本地 FRP visitor 访问真实服务端 (172.23.197.68:18080 -> 云端 Gateway 8080)
+    // 云端 Gateway 路径: /v1/projects, /tasks/{id} (查询任务状态)
+    const QUrl PROJECT_API_URL = QUrl("http://172.23.197.68:18080/v1/projects");
+    const QUrl TASK_API_BASE_URL = QUrl("http://172.23.197.68:18080/tasks");
 
     enum RequestType {
         CreateProjectDirect = 1,

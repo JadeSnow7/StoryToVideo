@@ -65,13 +65,13 @@ void NetworkManager::getShotListRequest(const QString &projectId)
 }
 
 // --- 3. 任务 API 请求：更新分镜 (POST /v1/api/tasks) ---
-void NetworkManager::updateShotRequest(int shotId, const QString &prompt, const QString &style)
+void NetworkManager::updateShotRequest(const QString &shotId, const QString &prompt, const QString &style)
 {
     qDebug() << "发送 UpdateShot 请求...";
 
     QJsonObject requestJson;
     requestJson["type"] = "updateShot"; // 假设类型为 updateShot
-    requestJson["shotId"] = QString::number(shotId);
+    requestJson["shotId"] = shotId;
 
     QJsonObject parameters;
     QJsonObject shot;
@@ -92,27 +92,21 @@ void NetworkManager::updateShotRequest(int shotId, const QString &prompt, const 
     m_networkManager->post(request, postData);
 }
 
-// --- 4. 任务 API 请求：生成视频 (POST /v1/api/tasks) ---
+// --- 4. 任务 API 请求：生成视频 (POST /v1/api/projects/:project_id/video) ---
 void NetworkManager::generateVideoRequest(const QString &projectId)
 {
-    qDebug() << "发送 GenerateVideo 请求 for Project ID:" << projectId;
+    // Gateway 使用 /v1/api/projects/{project_id}/video 来生成视频
+    QUrl url = QUrl(PROJECT_API_URL.toString() + "/" + projectId + "/video");
+    qDebug() << "发送 GenerateVideo 请求 for Project ID:" << projectId << "URL:" << url;
 
     QJsonObject requestJson;
-    requestJson["type"] = "generateVideo";
-    requestJson["projectId"] = projectId;
-
-    QJsonObject parameters;
-    QJsonObject video;
-    video["format"] = "mp4";
-    video["resolution"] = "1920x1080";
-    parameters["video"] = video;
-    requestJson["parameters"] = parameters;
-
+    requestJson["format"] = "mp4";
+    requestJson["resolution"] = "1920x1080";
 
     QJsonDocument doc(requestJson);
     QByteArray postData = doc.toJson(QJsonDocument::Compact);
 
-    QNetworkRequest request(TASK_API_BASE_URL);
+    QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
     request.setAttribute(RequestTypeAttribute, NetworkManager::GenerateVideo);
@@ -208,7 +202,7 @@ void NetworkManager::onNetworkReplyFinished(QNetworkReply *reply)
         if (taskId.isEmpty()) {
             emit networkError("API 返回中未找到 task_id。");
         } else {
-            int shotId = (type == NetworkManager::UpdateShot) ? reply->request().attribute(ShotIdAttribute).toInt() : 0;
+            QString shotId = (type == NetworkManager::UpdateShot) ? reply->request().attribute(ShotIdAttribute).toString() : QString();
             emit taskCreated(taskId, shotId);
         }
     }
@@ -217,10 +211,13 @@ void NetworkManager::onNetworkReplyFinished(QNetworkReply *reply)
     {
         QString taskId = reply->request().attribute(TaskIdAttribute).toString();
         QJsonDocument jsonDoc = QJsonDocument::fromJson(responseData);
-        QJsonObject taskObj = jsonDoc.object()["task"].toObject();
+        // Gateway 直接返回任务对象，不是嵌套在 "task" 键下
+        QJsonObject taskObj = jsonDoc.object();
 
         QString status = taskObj["status"].toString();
         int progress = taskObj["progress"].toInt();
+
+        qDebug() << "Task:" << taskId << " Status:" << status << " Progress:" << progress << " Message:" << taskObj["message"].toString();
 
         if (status == "finished") {
             // 任务完成，提取 result 字段

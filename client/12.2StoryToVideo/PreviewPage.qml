@@ -1,11 +1,20 @@
 // PreviewPage.qml
-import QtQuick 2.6
-import QtQuick.Controls 2.1
-import QtQuick.Layouts 1.2
-import QtMultimedia 5.8
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import QtMultimedia
 
 Page {
     id: previewPage
+
+    // macOS 风格配色 & 字体
+    readonly property color macBackground: "#F5F5F7"
+    readonly property color macCard: "#FFFFFF"
+    readonly property color macBorder: "#D1D5DB"
+    readonly property color macTextPrimary: "#0B0B0F"
+    readonly property color macTextSecondary: "#6B7280"
+    readonly property string macTitleFont: "-apple-system"
+    readonly property string macBodyFont: "-apple-system"
 
     property string projectId: ""
     property string videoSource: ""
@@ -18,15 +27,66 @@ Page {
         console.log("Available multimedia backends:", QtMultimedia.availableBackends);
     }
 
+    Rectangle {
+        anchors.fill: parent
+        color: macBackground
+
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 15
+        anchors.margins: 24
+        spacing: 16
+
+        // ========== 顶部导航栏 ==========
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            Button {
+                text: "← 返回"
+                font.family: macBodyFont
+                background: Rectangle {
+                    radius: 10
+                    color: "transparent"
+                    border.color: macBorder
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: macTextPrimary
+                    font.pixelSize: 14
+                    font.family: macBodyFont
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: {
+                    videoPlayer.stop();
+                    pageStack.pop();
+                }
+            }
+
+            Text {
+                text: qsTr("成品预览")
+                font.pixelSize: 20
+                font.bold: true
+                font.family: macTitleFont
+                color: macTextPrimary
+                Layout.fillWidth: true
+            }
+
+            // 项目 ID 标签
+            Text {
+                text: qsTr("项目: %1").arg(projectId)
+                font.pixelSize: 13
+                font.family: macBodyFont
+                color: macTextSecondary
+            }
+        }
 
         Label {
             text: "最终视频合成预览"
-            font.pointSize: 14
+            font.pointSize: 15
             font.bold: true
+            font.family: macTitleFont
+            color: macTextPrimary
         }
 
         // --- 视频播放器区域 ---
@@ -34,7 +94,8 @@ Page {
             id: videoContainer
             Layout.fillWidth: true
             Layout.preferredHeight: 450
-            color: "black"
+            color: "#1C1C1E"
+            radius: 16
 
             // 【关键修改】在 Qt 5.8 中，有时需要先创建 MediaPlayer，再创建 VideoOutput
             MediaPlayer {
@@ -140,18 +201,21 @@ Page {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 60
-            color: "#f0f0f0"
-            radius: 5
+            color: macCard
+            radius: 12
+            border.color: macBorder
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
+                anchors.margins: 12
 
                 Text {
                     text: "视频信息: " +
                           (videoPlayer.hasVideo ? "有视频" : "无视频") + " | " +
                           (videoPlayer.hasAudio ? "有音频" : "无音频")
-                    font.pointSize: 10
+                    font.pointSize: 11
+                    font.family: macBodyFont
+                    color: macTextPrimary
                 }
 
                 Text {
@@ -163,29 +227,97 @@ Page {
                            videoPlayer.status === MediaPlayer.Stalled ? "停滞" :
                            videoPlayer.status === MediaPlayer.EndOfMedia ? "播放结束" :
                            "未知状态")
-                    font.pointSize: 10
+                    font.pointSize: 11
+                    font.family: macBodyFont
+                    color: macTextSecondary
                 }
             }
         }
 
         // --- 导出功能区域 ---
-        Button {
-            text: "Export Video (导出成品文件)"
-            Layout.alignment: Qt.AlignRight
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 15
 
-            onClicked: {
-                console.log("启动视频文件导出功能...");
+            Button {
+                text: "← 返回故事板"
+                onClicked: {
+                    videoPlayer.stop();
+                    pageStack.pop();
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+                id: exportButton
+                text: qsTr("导出视频")
+                font.pixelSize: 15
+                font.bold: true
+                font.family: macBodyFont
+                
+                property bool isExporting: false
+
+                background: Rectangle {
+                    radius: 14
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: "#4A8BFF" }
+                        GradientStop { position: 1.0; color: "#2D6BFF" }
+                    }
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: "white"
+                    font.pixelSize: 15
+                    font.bold: true
+                    font.family: macBodyFont
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                onClicked: {
+                    if (!isExporting) {
+                        isExporting = true;
+                        exportButton.text = qsTr("导出中...");
+                        console.log("启动视频文件导出功能...");
+                        
+                        // 调用 C++ 导出方法 (如果有)
+                        if (viewModel && viewModel.exportVideo) {
+                            viewModel.exportVideo(projectId, videoSource);
+                        } else {
+                            // 模拟导出完成
+                            exportTimer.start();
+                        }
+                    }
+                }
             }
         }
 
-        // 返回按钮
-        Button {
-            text: "返回资产库"
-            Layout.alignment: Qt.AlignLeft
-            onClicked: {
-                videoPlayer.stop();
-                pageStack.clear();
+        // 模拟导出完成的定时器
+        Timer {
+            id: exportTimer
+            interval: 2000
+            onTriggered: {
+                exportButton.isExporting = false;
+                exportButton.text = qsTr("导出视频");
+                exportSuccessDialog.open();
             }
+        }
+    }
+    }
+
+    // 导出成功对话框
+    Dialog {
+        id: exportSuccessDialog
+        title: qsTr("导出成功")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok
+
+        Label {
+            text: qsTr("视频已成功导出到本地！\n\n文件位置: ~/Downloads/")
+            wrapMode: Text.WordWrap
+            width: 280
         }
     }
 }

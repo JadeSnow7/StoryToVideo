@@ -1204,6 +1204,11 @@ def _storyboard_to_shots(project_id: str, storyboard: List[Dict]) -> List[Dict]:
 
 @app.post("/v1/projects")
 async def create_project(Title: Optional[str] = None, StoryText: Optional[str] = None, Style: Optional[str] = None):
+    """
+    注意：此接口仅用于测试/兼容目的。
+    客户端应连接 Go Server (119.45.124.222:8080)，而非直接连接 Gateway。
+    Gateway 主要用于服务端与 AI 模型之间的通信。
+    """
     project_id = str(uuid.uuid4())
     now = _now_iso()
     shot_count = 5
@@ -1352,9 +1357,46 @@ async def project_tts(project_id: str):
 
 
 @app.post("/v1/projects/{project_id}/video")
-async def project_video(project_id: str):
+async def project_video(project_id: str, background_tasks: BackgroundTasks):
     _get_or_404_project(project_id)
     task_id = str(uuid.uuid4())
+    now = _now_iso()
+    
+    # 创建任务记录到 tasks 字典中
+    tasks[task_id] = TaskState(
+        id=task_id,
+        project_id=project_id,
+        type=TASK_TYPE_VIDEO,
+        status=TASK_STATUS_PENDING,
+        progress=0,
+        message="video task created",
+        createdAt=now,
+        updatedAt=now,
+    )
+    
+    # 模拟后台处理 - 几秒后完成
+    async def mock_video_task():
+        import asyncio
+        await asyncio.sleep(2)
+        if task_id in tasks:
+            tasks[task_id].status = TASK_STATUS_PROCESSING
+            tasks[task_id].progress = 50
+            tasks[task_id].message = "generating video..."
+            tasks[task_id].updatedAt = _now_iso()
+        await asyncio.sleep(2)
+        if task_id in tasks:
+            tasks[task_id].status = TASK_STATUS_FINISHED
+            tasks[task_id].progress = 100
+            tasks[task_id].message = "video ready"
+            tasks[task_id].result = {
+                "resource_type": "video",
+                "resource_id": project_id,
+                "resource_url": f"/files/final/{project_id}.mp4",
+            }
+            tasks[task_id].updatedAt = _now_iso()
+            tasks[task_id].finishedAt = _now_iso()
+    
+    background_tasks.add_task(mock_video_task)
     return {"task_id": task_id, "message": "accepted", "project_id": project_id}
 
 

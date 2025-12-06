@@ -20,12 +20,12 @@ public:
 
     Q_INVOKABLE void generateStoryboard(const QString &storyText, const QString &style);
     Q_INVOKABLE void startVideoCompilation(const QString &storyId);
-    Q_INVOKABLE void generateShotImage(int shotId, const QString &prompt, const QString &transition);
+    Q_INVOKABLE void generateShotImage(const QString &shotId, const QString &prompt, const QString &transition);
 
 signals:
     void storyboardGenerated(const QVariant &storyData);
     void generationFailed(const QString &errorMsg);
-    void imageGenerationFinished(int shotId, const QString &imageUrl);
+    void imageGenerationFinished(const QString &shotId, const QString &imageUrl);
     void compilationProgress(const QString &storyId, int percent);
 
 private slots:
@@ -33,7 +33,7 @@ private slots:
     void handleTextTaskCreated(const QString &projectId, const QString &textTaskId, const QVariantList &shotTaskIds);
 
     // [修改/通用] 任务状态管理槽函数
-    void handleTaskCreated(const QString &taskId, int shotId);
+    void handleTaskCreated(const QString &taskId, const QString &shotId);
     void handleTaskStatusReceived(const QString &taskId, int progress, const QString &status, const QString &message);
     void handleTaskResultReceived(const QString &taskId, const QVariantMap &resultData);
     void handleTaskRequestFailed(const QString &taskId, const QString &errorMsg);
@@ -63,7 +63,7 @@ private:
 
     // 私有辅助函数
     void processStoryboardResult(const QString &taskId, const QVariantMap &resultData);
-    void processImageResult(int shotId, const QVariantMap &resultData);
+    void processImageResult(const QString &shotId, const QVariantMap &resultData);
     void processVideoResult(const QString &storyId, const QVariantMap &resultData);
 
 };

@@ -1,8 +1,0 @@
-[common]
-server_addr = <your_public_server_ip>
-server_port = 7000
-
-[model-api]
-type = tcp
-local_port = 8000
-remote_port = 18000

@@ -1,7 +1,7 @@
-serverAddr = "<frps_host>"
+serverAddr = "119.45.124.222"
 serverPort = 7000
 auth.method = "token"
-auth.token = "<token>"   # 与 frps 一致
+auth.token = "Story2Video"   # 与 frps 一致
 
 [[proxies]]
 name = "web"

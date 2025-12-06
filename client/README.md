@@ -4,7 +4,7 @@
 
 ## ✨ 核心功能与技术栈
 
-本项目兼容 **Qt 5.8 / MinGW 32-bit** 环境，并实现了与外部 AI 服务的异步通信。
+本项目兼容 **Qt 6.5+**（macOS/Windows，CMake 构建）环境，并实现了与外部 AI 服务的异步通信。
 
 | 模块 | 技术栈 / API | 状态 | 职责 |
 | :--- | :--- | :--- | :--- |
@@ -58,3 +58,21 @@
 2.  **视频合成：** 实现 `VideoProcessor` 类，集成 FFmpeg 库，完成视频合成和转场逻辑。
 3.  **数据持久化：** 集成 SQLite，实现项目数据的离线存储。
 4.  **修复视频预览：** 解决 Qt Multimedia 插件缺失问题，以启用 `Video` 元素。
+
+## 🍎 macOS 本地构建步骤 (Qt 6 + CMake)
+
+1) 安装依赖（Homebrew）：`brew install qt cmake ninja`  
+2) 配置（以仓库根目录为起点）：  
+   ```
+   cd client
+   cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
+   ```
+3) 编译并运行：  
+   ```
+   cmake --build build
+   ./build/storytovideo.app/Contents/MacOS/storytovideo
+   ```
+
+> 说明：
+> - CMake 已切换到 `StoryToVideoGenerator` 源码（QML + C++），无需再使用 qmake。  
+> - macOS 使用 `AVFoundation` 多媒体后端；生成的图像保存到 `~/Library/Application Support/<app>/shots` 目录，避免写入 .app 内部。

@@ -1,0 +1,23 @@
+server:
+  port: ":8080"
+mysql:
+  dsn: "root:12345678@tcp(127.0.0.1:3306)/storydb2?charset=utf8mb4&parseTime=True&loc=Local"
+ai:
+  image_api: "http://ai-image-service/api/generate"
+  voice_api: "http://ai-voice-service/api/generate"
+
+redis:
+  addr: "127.0.0.1:6379"  
+  password: ""            
+  db: 0                   
+
+worker:
+  addr: "http://127.0.0.1:18000"
+  timeout_minutes: 20 
+minio:
+    endpoint: "119.45.124.222:9000"  # MinIO 的地址
+    access_key: "story2video"
+    secret_key: "s2v_secret"
+    bucket: "story2video"      # 存放视频的桶名
+    use_ssl: false              # 本地 docker 通常是 false，线上 TOS 可能是 true
+    domain: "http://127.0.0.1:9001" # 用于拼接对外访问的 URL

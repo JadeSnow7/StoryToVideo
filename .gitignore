@@ -21,3 +21,61 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# Qt/C++ Build artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.app/
+*.stash
+Makefile
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.pro.user
+*.pro.user.*
+*.qmake.stash
+moc_predefs.h
+
+# Build directories
+build/
+dist/
+dist-app/
+release/
+debug/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Package files
+*.zip
+*.tar.gz
+*.rar
+
+# Client specific
+client/build/
+client/dist-app/
+client/*/StoryToVideoGenerator.app/
+storytovideo.app/
+storytovideo*.zip
+
+# Server logs
+server/log/
+
+# Word documents (not source code)
+*.docx
+*.pdf

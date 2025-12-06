@@ -9,3 +9,11 @@ type = "tcp"
 localIP = "127.0.0.1"
 localPort = 8000
 remotePort = 18000
+
+[[proxies]]
+name = "server-8080-stcp"
+type = "stcp"
+# 需要运行在可以直接访问 Go 服务的机器上（例如云服务器或模型端）
+localIP = "127.0.0.1"
+localPort = 8080
+secretKey = "story-secret"

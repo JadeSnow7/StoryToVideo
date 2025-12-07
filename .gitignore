@@ -69,12 +69,22 @@ debug/
 # Client specific
 client/build/
 client/dist-app/
+client/*/.xcode/
+client/*/Release/
 client/*/StoryToVideoGenerator.app/
+client/*/*.dmg
 storytovideo.app/
 storytovideo*.zip
+*.dmg
+*.pkg
+*.exe
 
 # Server logs
 server/log/
+
+# Server test outputs (generated media)
+server/gin-server/static/tasks/*/
+server/static/tasks/*/
 
 # Word documents (not source code)
 *.docx

@@ -12,6 +12,7 @@ Page {
 
     // 状态属性
     property string storyText: ""
+    property string projectName: ""  // [新增] 项目名称
     property string selectedStyle: "电影"
     property bool isGenerating: false
     property int generationProgress: 0
@@ -108,29 +109,123 @@ Page {
         }
     }
 
-    // --- 错误对话框 ---
+    // --- 错误对话框 (macOS 风格) ---
     Dialog {
         id: errorDialog
-        title: qsTr("生成失败")
+        title: ""
         modal: true
         anchors.centerIn: parent
-        standardButtons: Dialog.Retry | Dialog.Cancel
+        width: 360
+        padding: 0
 
         property string errorMessage: ""
 
-        Label {
-            text: errorDialog.errorMessage
-            wrapMode: Text.WordWrap
-            width: 280
+        background: Rectangle {
+            radius: 16
+            color: macCard
+            border.color: macBorder
+            layer.enabled: true
+            layer.effect: DropShadow {
+                radius: 20
+                samples: 25
+                color: "#30000000"
+                verticalOffset: 8
+            }
         }
 
-        onAccepted: {
-            // 重试生成
-            if (storyText.trim().length > 0) {
-                isGenerating = true;
-                generationProgress = 0;
-                statusMessage = "";
-                viewModel.generateStoryboard(storyText.trim(), selectedStyle);
+        contentItem: ColumnLayout {
+            spacing: 16
+            
+            // 标题栏
+            Rectangle {
+                Layout.fillWidth: true
+                height: 50
+                radius: 16
+                color: "#FF6B6B"
+                
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: parent.height / 2
+                    color: parent.color
+                }
+                
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("生成失败")
+                    font.bold: true
+                    font.pixelSize: 18
+                    font.family: macTitleFont
+                    color: "white"
+                }
+            }
+            
+            // 错误信息
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                text: errorDialog.errorMessage
+                wrapMode: Text.WordWrap
+                font.pixelSize: 14
+                font.family: macBodyFont
+                color: macTextPrimary
+            }
+            
+            // 按钮区
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                Layout.bottomMargin: 20
+                spacing: 12
+                
+                Button {
+                    Layout.fillWidth: true
+                    text: qsTr("取消")
+                    background: Rectangle {
+                        radius: 10
+                        color: macSecondary
+                        border.color: macBorder
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        font.pixelSize: 14
+                        font.family: macBodyFont
+                        color: macTextPrimary
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    onClicked: errorDialog.close()
+                }
+                
+                Button {
+                    Layout.fillWidth: true
+                    text: qsTr("重试")
+                    background: Rectangle {
+                        radius: 10
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: "#4A8BFF" }
+                            GradientStop { position: 1.0; color: "#2D6BFF" }
+                        }
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        font.pixelSize: 14
+                        font.bold: true
+                        font.family: macBodyFont
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    onClicked: {
+                        errorDialog.close()
+                        if (storyText.trim().length > 0) {
+                            isGenerating = true;
+                            generationProgress = 0;
+                            statusMessage = "";
+                            viewModel.generateStoryboard(storyText.trim(), selectedStyle, projectName);
+                        }
+                    }
+                }
             }
         }
     }
@@ -153,7 +248,8 @@ Page {
                 Button {
                     text: "← " + qsTr("返回")
                     Layout.preferredWidth: 98
-                    enabled: !isGenerating
+                    // 生成期间也可以点击返回
+                    enabled: true
                     font.family: macBodyFont
                     background: Rectangle {
                         radius: 10
@@ -170,9 +266,7 @@ Page {
                         font.family: macBodyFont
                     }
                     onClicked: {
-                        if (!isGenerating) {
-                            pageStack.pop()
-                        }
+                        pageStack.pop()
                     }
                 }
 
@@ -181,7 +275,8 @@ Page {
                 Button {
                     text: qsTr("查看所有故事")
                     Layout.preferredWidth: 150
-                    enabled: !isGenerating
+                    // 生成期间也可以查看故事列表
+                    enabled: true
                     font.family: macBodyFont
                     background: Rectangle {
                         radius: 14
@@ -200,7 +295,11 @@ Page {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    onClicked: pageStack.pop()
+                    onClicked: {
+                        // 使用 push 而不是 pop，这样 CreatePage 保留在栈中
+                        // 用户可以从 AssetsPage 返回继续查看生成进度
+                        pageStack.push(Qt.resolvedUrl("AssetsPage.qml"))
+                    }
                 }
             }
 
@@ -275,6 +374,37 @@ Page {
                         anchors.margins: 20
                         spacing: 14
 
+                        // [新增] 项目名称输入
+                        Text {
+                            text: qsTr("项目名称")
+                            font.pixelSize: 20
+                            font.family: macTitleFont
+                            color: macTextPrimary
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: 44
+                            radius: 10
+                            color: macSecondary
+                            border.color: macBorder
+
+                            TextField {
+                                id: projectNameField
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                placeholderText: qsTr("输入项目名称（可选）")
+                                text: projectName
+                                onTextChanged: projectName = text
+                                font.pixelSize: 14
+                                font.family: macBodyFont
+                                color: macTextPrimary
+                                background: null
+                            }
+                        }
+
+                        Item { height: 8 }  // 间距
+
                         Text {
                             text: qsTr("故事文本")
                             font.pixelSize: 20
@@ -292,22 +422,29 @@ Page {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            Layout.minimumHeight: 120
                             radius: 14
                             color: macSecondary
                             border.color: macBorder
 
-                            TextArea {
+                            ScrollView {
                                 anchors.fill: parent
-                                anchors.margins: 18
-                                placeholderText: qsTr("请输入您的故事，系统将自动生成分镜...")
-                                color: macTextPrimary
-                                wrapMode: TextEdit.Wrap
-                                text: storyText
-                                onTextChanged: storyText = text
-                                font.pixelSize: 14
-                                font.family: macBodyFont
-                                background: null
-                                cursorVisible: true
+                                anchors.margins: 4
+                                clip: true
+
+                                TextArea {
+                                    id: storyTextArea
+                                    anchors.margins: 14
+                                    placeholderText: qsTr("请输入您的故事，系统将自动生成分镜...")
+                                    color: macTextPrimary
+                                    wrapMode: TextEdit.Wrap
+                                    text: storyText
+                                    onTextChanged: storyText = text
+                                    font.pixelSize: 14
+                                    font.family: macBodyFont
+                                    background: null
+                                    cursorVisible: true
+                                }
                             }
                         }
 
@@ -435,7 +572,7 @@ Page {
                             onClicked: {
                                 isGenerating = true;
                                 console.log("调用 C++ generateStoryboard，风格:", selectedStyle);
-                                viewModel.generateStoryboard(storyText.trim(), selectedStyle);
+                                viewModel.generateStoryboard(storyText.trim(), selectedStyle, projectName);
                             }
                         }
                     }

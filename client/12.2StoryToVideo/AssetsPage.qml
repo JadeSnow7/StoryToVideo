@@ -25,15 +25,44 @@ Page {
     // ⚠ 请你在这里填写资产文件夹路径，例如：
     // file:///C:/Users/admin/Desktop/Assert/
     // macOS: 改为本机存在的目录，避免无效路径阻断 UI
-    property string assetsRoot: "file:///Users/huaodong/Movies/Videos/"   // 填绝对路径
+    property string assetsRoot: "file:///Users/huaodong/Movies/StoryToVideo/"   // 专用项目存储目录
+    property bool isLoadingProject: false // 防止与 CreatePage 的信号冲突
 
     // 读取资产根目录下的所有子文件夹
     FolderListModel {
         id: folderModel
         folder: assetsRoot
-        nameFilters: ["*"]
+        nameFilters: ["Project_*"]  // 只显示 Project_* 文件夹
         showDirs: true
         showFiles: false
+        showDotAndDotDot: false  // 排除 . 和 .. 目录
+    }
+
+    Connections {
+        target: viewModel
+        function onStoryboardGenerated(data) {
+            if (assetsPage.isLoadingProject) {
+                console.log("AssetsPage:Project loaded, navigating to StoryboardPage");
+                assetsPage.isLoadingProject = false;
+                pageStack.push(Qt.resolvedUrl("StoryboardPage.qml"), {
+                    storyId: data.id,
+                    storyTitle: data.title || "加载的项目",
+                    shotsData: data.shots || [], // [修正] 匹配 StoryboardPage 的 shotsData 属性
+                    stackViewRef: pageStack     // [重要] 传递 stackViewRef 用于后续导航
+                });
+            }
+        }
+    }
+
+    Connections {
+        target: viewModel
+        function onGenerationFailed(msg) {
+            if (assetsPage.isLoadingProject) {
+                console.log("AssetsPage: Loading failed", msg);
+                assetsPage.isLoadingProject = false;
+                // 可以显示一个 Toast 或 Dialog，这里简单打印
+            }
+        }
     }
 
     Rectangle {
@@ -62,6 +91,21 @@ Page {
             Button {
                 text: "刷新"
                 font.pixelSize: 14
+                font.family: macBodyFont
+                background: Rectangle {
+                    radius: 18
+                    color: "white"
+                    border.color: macBorder
+                    border.width: 1
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: macTextPrimary
+                    font.pixelSize: 14
+                    font.family: macBodyFont
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
                 onClicked: {
                     // 重新加载文件夹列表
                     folderModel.folder = "";
@@ -173,11 +217,13 @@ Page {
 
                     // 不展示根目录自身（第 0 项一般是 "."）
                     delegate: Rectangle {
+                        id: cardRect
                         width: 240
                         height: 220
                         radius: 16
                         color: macCard
                         border.color: macBorder
+                        border.width: 1
                         layer.enabled: true
                         layer.effect: DropShadow {
                             color: "#1F000000"
@@ -204,6 +250,33 @@ Page {
                             }
                         }
 
+                        // ★ MouseArea 放在 Rectangle 级别，覆盖整个卡片
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            hoverEnabled: true
+                            onClicked: {
+                                // 点击尝试加载项目进入故事板
+                                console.log("尝试加载项目:", cardRect.folderPath)
+                                assetsPage.isLoadingProject = true
+                                viewModel.loadProject(cardRect.folderPath)
+                            }
+                            onEntered: {
+                                cardRect.border.color = "#4D7CFE"
+                                cardRect.border.width = 2
+                                cardRect.scale = 1.02
+                            }
+                            onExited: {
+                                cardRect.border.color = macBorder
+                                cardRect.border.width = 1
+                                cardRect.scale = 1.0
+                            }
+                        }
+
+                        Behavior on scale {
+                            NumberAnimation { duration: 120; easing.type: Easing.OutQuad }
+                        }
+
                         ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 16
@@ -221,25 +294,27 @@ Page {
                                     anchors.fill: parent
                                     anchors.margins: 2
                                     fillMode: Image.PreserveAspectCrop
-                                    visible: thumbToShow !== ""
-                                    source: thumbToShow
+                                    visible: cardRect.thumbToShow !== ""
+                                    source: cardRect.thumbToShow
                                 }
 
                                 // fallback 文本
                                 Text {
                                     anchors.centerIn: parent
-                                    visible: thumbToShow === ""
+                                    visible: cardRect.thumbToShow === ""
                                     text: "缩略图\n未找到"
                                     color: "gray"
                                 }
                             }
 
                             Text {
-                                text: folderPath.split("/").pop()
+                                text: dataManager.getProjectTitle(cardRect.folderPath)
                                 font.bold: true
                                 font.pixelSize: 16
                                 font.family: macTitleFont
                                 color: macTextPrimary
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
                             }
 
                             Rectangle {
@@ -254,39 +329,22 @@ Page {
                                     color: "#5A54E3"
                                 }
                             }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: {
-                                    // 视频路径：file:///xxx/video.mp4
-                                    var videoPath = "file:///" + folderPath + "/video.mp4"
-
-                                    console.log("打开视频:", videoPath)
-
-                                    pageStack.push(Qt.resolvedUrl("PreviewPage.qml"), {
-                                        videoPath: videoPath
-                                    })
-                                }
-                                hoverEnabled: true
-                                onEntered: parent.border.color = "#B0B5FF"
-                                onExited: parent.border.color = "#E5E5F0"
-                            }
-                        }
                     }
                 }
+                } // 结束 Flow
 
-                // 空态提示
+                // 空态提示 - 完全独立于 Flow
                 Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: 40
-                    text: folderModel.count === 0 ? qsTr("未检测到资产，请先在右上角创建故事或配置 assetsRoot") : ""
+                    visible: folderModel.count === 0
+                    text: qsTr("未检测到资产，请先在右上角创建故事或配置 assetsRoot")
                     font.family: macBodyFont
                     font.pixelSize: 14
                     color: macTextSecondary
+                    x: 40
+                    y: 40
                 }
-            }
-            }
+            } // 结束 ScrollView
+        } // 结束 Rectangle
         }
         }
     }

@@ -992,7 +992,7 @@ func processResourceToMinIO(result *models.TaskResult, objectName string) (strin
 }
 
 func downloadAndUploadToMinIO(sourceURL, objectName string) (string, error) {
-	resp, err := http.Get("http://127.0.0.1:18000" + sourceURL)
+	resp, err := http.Get(config.AppConfig.Worker.Addr + sourceURL)
 	if err != nil {
 		return "", fmt.Errorf("download failed: %v", err)
 	}

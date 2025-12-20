@@ -379,7 +379,8 @@ Page {
                     // 使用传递进来的 StackView 引用进行 push
                     stackViewRef.push(Qt.resolvedUrl("PreviewPage.qml"), {
                         videoSource: videoUrl,
-                        projectId: projectId
+                        projectId: projectId,
+                        showStoryboardButton: true
                     });
                     console.log("✅ NAV SUCCESS: PreviewPage push succeeded.");
                 } catch (e) {

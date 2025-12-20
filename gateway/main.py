@@ -1335,29 +1335,71 @@ async def update_shot(project_id: str, shot_id: str, background_tasks: Backgroun
         updatedAt=now,
     )
     
-    # 模拟后台处理
-    async def mock_shot_task():
-        import asyncio
-        await asyncio.sleep(1)
-        if task_id in tasks:
-            tasks[task_id].status = TASK_STATUS_PROCESSING
-            tasks[task_id].progress = 50
-            tasks[task_id].message = "generating image..."
-            tasks[task_id].updatedAt = _now_iso()
-        await asyncio.sleep(1)
-        if task_id in tasks:
-            tasks[task_id].status = TASK_STATUS_FINISHED
-            tasks[task_id].progress = 100
-            tasks[task_id].message = "shot ready"
-            tasks[task_id].result = {
-                "resource_type": "shot",
-                "resource_id": shot_id,
-                "image_url": f"/files/shots/{shot_id}.png",
+    # [修正] 真正调用 txt2img 服务生成图片
+    async def real_shot_task():
+        try:
+            if task_id in tasks:
+                tasks[task_id].status = TASK_STATUS_PROCESSING
+                tasks[task_id].progress = 20
+                tasks[task_id].message = "generating image..."
+                tasks[task_id].updatedAt = _now_iso()
+            
+            # 构建 prompt：使用 shot 的 prompt 或 title
+            image_prompt = shot.get("prompt") or shot.get("title") or f"Shot {shot.get('order', 1)}"
+            style = shot.get("transition") or ""  # transition 可作为风格提示
+            if style:
+                image_prompt = f"{style}, {image_prompt}"
+            
+            # 调用 txt2img 服务
+            payload_img = {
+                "prompt": image_prompt,
+                "scene_id": shot_id,
+                "style": {
+                    "width": 768,
+                    "height": 512,
+                    "num_inference_steps": 4,
+                    "guidance_scale": 1.5,
+                },
             }
-            tasks[task_id].updatedAt = _now_iso()
-            tasks[task_id].finishedAt = _now_iso()
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(TXT2IMG_URL, json=payload_img)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"txt2img failed: {resp.status_code} - {resp.text}")
+                img_data = resp.json()
+            
+            images = img_data.get("images") or []
+            if not images:
+                raise RuntimeError("No images generated")
+            
+            image_path = images[0].get("path") or images[0].get("url") or ""
+            image_url = _to_file_url(image_path)
+            
+            # 更新 shot 数据
+            shot["imagePath"] = image_url
+            shot["status"] = "completed"
+            shot["updatedAt"] = _now_iso()
+            shots[shot_id] = shot
+            
+            if task_id in tasks:
+                tasks[task_id].status = TASK_STATUS_FINISHED
+                tasks[task_id].progress = 100
+                tasks[task_id].message = "shot ready"
+                tasks[task_id].result = {
+                    "resource_type": "image",
+                    "resource_id": shot_id,
+                    "resource_url": image_url,
+                }
+                tasks[task_id].updatedAt = _now_iso()
+                tasks[task_id].finishedAt = _now_iso()
+        except Exception as exc:
+            if task_id in tasks:
+                tasks[task_id].status = TASK_STATUS_FAILED
+                tasks[task_id].message = f"failed: {exc}"
+                tasks[task_id].error = str(exc)
+                tasks[task_id].updatedAt = _now_iso()
     
-    background_tasks.add_task(mock_shot_task)
+    background_tasks.add_task(real_shot_task)
     return {"shot_id": shot_id, "task_id": task_id, "message": "updated"}
 
 

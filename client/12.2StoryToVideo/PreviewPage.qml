@@ -18,6 +18,7 @@ Page {
 
     property string projectId: ""
     property string videoSource: ""
+    property bool showStoryboardButton: false // 默认为 false
 
     title: "成品预览 (" + projectId + ")"
 
@@ -97,10 +98,11 @@ Page {
             color: "#1C1C1E"
             radius: 16
 
-            // 【关键修改】在 Qt 5.8 中，有时需要先创建 MediaPlayer，再创建 VideoOutput
+            // 【关键修改】Qt 6 中 MediaPlayer 使用 videoOutput 属性指向 VideoOutput 组件
             MediaPlayer {
                 id: videoPlayer
                 source: videoSource
+                videoOutput: videoOutput
 
                 // 添加事件监听用于调试
                 onErrorOccurred: console.error("MediaPlayer error:", error, errorString)
@@ -120,7 +122,6 @@ Page {
             VideoOutput {
                 id: videoOutput
                 anchors.fill: parent
-                source: videoPlayer
                 fillMode: VideoOutput.PreserveAspectFit
 
                 // 添加备用显示
@@ -158,16 +159,29 @@ Page {
 
                 Button {
                     text: videoPlayer.playbackState === MediaPlayer.PlayingState ? "暂停" : "播放"
+                    font.family: macBodyFont
+                    background: Rectangle {
+                        radius: 8
+                        color: "white"
+                        opacity: parent.down ? 0.9 : 1.0
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "black"
+                        font.pixelSize: 13
+                        font.family: macBodyFont
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                     onClicked: {
                         if (videoPlayer.playbackState === MediaPlayer.PlayingState) {
                             videoPlayer.pause();
                         } else {
-                            // 先确保视频已准备就绪
                             if (videoPlayer.status === MediaPlayer.Loaded) {
                                 videoPlayer.play();
                             } else {
                                 console.log("等待视频加载...");
-                                videoPlayer.play(); // 尝试播放
+                                videoPlayer.play();
                             }
                         }
                     }
@@ -175,9 +189,22 @@ Page {
 
                 Button {
                     text: "停止"
+                    font.family: macBodyFont
+                    background: Rectangle {
+                        radius: 8
+                        color: "#FF453A" // macOS Red
+                        opacity: parent.down ? 0.9 : 1.0
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        font.pixelSize: 13
+                        font.family: macBodyFont
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                     onClicked: {
                         videoPlayer.stop();
-                        // 重置到开始位置
                         videoPlayer.seek(0);
                     }
                 }
@@ -241,6 +268,20 @@ Page {
 
             Button {
                 text: "← 返回故事板"
+                visible: showStoryboardButton
+                font.family: macBodyFont
+                background: Rectangle {
+                    radius: 10
+                    color: "transparent"
+                    border.color: macBorder
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: macTextPrimary
+                    font.pixelSize: 14
+                    font.family: macBodyFont
+                    horizontalAlignment: Text.AlignHCenter
+                }
                 onClicked: {
                     videoPlayer.stop();
                     pageStack.pop();

@@ -1,75 +1,77 @@
 #ifndef NETWORKMANAGER_H
 #define NETWORKMANAGER_H
 
-#include <QObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QObject>
 #include <QString>
 #include <QUrl>
-#include <QVariantMap>
 #include <QVariantList>
+#include <QVariantMap>
 
-class NetworkManager : public QObject
-{
-    Q_OBJECT
+class NetworkManager : public QObject {
+  Q_OBJECT
 public:
-    explicit NetworkManager(QObject *parent = nullptr);
+  explicit NetworkManager(QObject *parent = nullptr);
 
-    // --- 1. 项目创建 (Direct / projects API) ---
-    // 负责创建项目并获取所有 Task IDs
-    void createProjectDirect(const QString &title, const QString &storyText, const QString &style, const QString &description);
+  // --- 1. 项目创建 (Direct / projects API) ---
+  // 负责创建项目并获取所有 Task IDs
+  void createProjectDirect(const QString &title, const QString &storyText,
+                           const QString &style, const QString &description);
 
-    // --- 2. 资源获取 API (项目/分镜数据) ---
-    // [新增] 获取分镜列表，用于文本任务完成后
-    void getShotListRequest(const QString &projectId);
+  // --- 2. 资源获取 API (项目/分镜数据) ---
+  // [新增] 获取分镜列表，用于文本任务完成后
+  void getShotListRequest(const QString &projectId);
 
-    // --- 3. 任务 API 请求 (异步 / tasks API) ---
-    void updateShotRequest(const QString &projectId, const QString &shotId, const QString &prompt, const QString &style);
-    void generateVideoRequest(const QString &projectId);
+  // --- 3. 任务 API 请求 (异步 / tasks API) ---
+  void updateShotRequest(const QString &projectId, const QString &shotId,
+                         const QString &prompt, const QString &style);
+  void generateVideoRequest(const QString &projectId);
 
-    // --- 4. 任务状态查询 API ---
-    void pollTaskStatus(const QString &taskId);
-
+  // --- 4. 任务状态查询 API ---
+  void pollTaskStatus(const QString &taskId);
 
 signals:
-    // [修改] 1. 文本任务创建成功信号：返回 ProjectID 和所有 Task IDs
-    void textTaskCreated(const QString &projectId, const QString &textTaskId, const QVariantList &shotTaskIds);
+  // [修改] 1. 文本任务创建成功信号：返回 ProjectID 和所有 Task IDs
+  void textTaskCreated(const QString &projectId, const QString &textTaskId,
+                       const QVariantList &shotTaskIds);
 
-    // [保留] 2. 业务请求成功并返回 task_id (用于分镜重生成/视频)
-    void taskCreated(const QString &taskId, const QString &shotId = QString());
+  // [保留] 2. 业务请求成功并返回 task_id (用于分镜重生成/视频)
+  void taskCreated(const QString &taskId, const QString &shotId = QString());
 
-    // [保留] 3. 任务状态更新 (用于轮询)
-    void taskStatusReceived(const QString &taskId, int progress, const QString &status, const QString &message);
+  // [保留] 3. 任务状态更新 (用于轮询)
+  void taskStatusReceived(const QString &taskId, int progress,
+                          const QString &status, const QString &message);
 
-    // [保留] 4. 任务完成并返回最终结果 (用于分镜/视频任务)
-    void taskResultReceived(const QString &taskId, const QVariantMap &resultData);
+  // [保留] 4. 任务完成并返回最终结果 (用于分镜/视频任务)
+  void taskResultReceived(const QString &taskId, const QVariantMap &resultData);
 
-    // [新增] 5. 分镜列表获取成功信号
-    void shotListReceived(const QString &projectId, const QVariantList &shots);
+  // [新增] 5. 分镜列表获取成功信号
+  void shotListReceived(const QString &projectId, const QVariantList &shots);
 
-    // [保留] 6. 错误信号
-    void taskRequestFailed(const QString &taskId, const QString &errorMsg);
-    void networkError(const QString &errorMsg);
+  // [保留] 6. 错误信号
+  void taskRequestFailed(const QString &taskId, const QString &errorMsg);
+  void networkError(const QString &errorMsg);
 
 private slots:
-    void onNetworkReplyFinished(QNetworkReply *reply);
+  void onNetworkReplyFinished(QNetworkReply *reply);
 
 private:
-    QNetworkAccessManager *m_networkManager;
+  QNetworkAccessManager *m_networkManager;
 
-    // 通过本地 FRP visitor 访问真实服务端 (172.23.197.68:18080 -> 云端 Gateway 8080)
-    // 云端 Gateway 路径: /v1/projects, /tasks/{id} (查询任务状态)
-    const QUrl PROJECT_API_URL = QUrl("http://172.23.197.68:18080/v1/projects");
-    const QUrl TASK_API_BASE_URL = QUrl("http://172.23.197.68:18080/tasks");
+  // 本地 Docker 部署 - 直连 Mac 本机 8080 端口
+  // API 路径: /v1/api/projects, /v1/api/tasks/{id}
+  const QUrl PROJECT_API_URL = QUrl("http://127.0.0.1:8080/v1/api/projects");
+  const QUrl TASK_API_BASE_URL = QUrl("http://127.0.0.1:8080/v1/api/tasks");
 
-    enum RequestType {
-        CreateProjectDirect = 1,
-        UpdateShot = 2,
-        GenerateVideo = 3,
-        PollStatus = 4,
-        // [新增] 资源获取类型
-        GetShotList = 5
-    };
+  enum RequestType {
+    CreateProjectDirect = 1,
+    UpdateShot = 2,
+    GenerateVideo = 3,
+    PollStatus = 4,
+    // [新增] 资源获取类型
+    GetShotList = 5
+  };
 };
 
 #endif // NETWORKMANAGER_H

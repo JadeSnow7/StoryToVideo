@@ -16,6 +16,7 @@ SOURCES += main.cpp \
     videoexporter.cpp
 # C++ 头文件
 HEADERS += ViewModel.h \
+    ApiConfig.h \
     NetworkManager.h \
     datamanager.h \
     videoexporter.h

@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import os
+import re
 import subprocess
 import uuid
 from collections import defaultdict
@@ -22,6 +23,14 @@ LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:8001/storyboard")
 TXT2IMG_URL = os.getenv("TXT2IMG_URL", "http://127.0.0.1:8002/generate")
 IMG2VID_URL = os.getenv("IMG2VID_URL", "http://127.0.0.1:8003/img2vid")
 TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:8004/narration")
+DEFAULT_IMG_STEPS = int(os.getenv("SD_IMG_STEPS", "4"))
+DEFAULT_CFG_SCALE = float(os.getenv("SD_CFG_SCALE", "1.5"))
+DEFAULT_IMG_WIDTH = int(os.getenv("SD_IMG_WIDTH", "384"))
+DEFAULT_IMG_HEIGHT = int(os.getenv("SD_IMG_HEIGHT", "256"))
+DEFAULT_NEGATIVE_PROMPT = os.getenv(
+    "SD_NEGATIVE_PROMPT",
+    "duplicate, overlapping, double exposure, mirrored face, fused face, extra people, extra person, cloned people, multiple heads, extra heads, extra faces, extra limbs, extra fingers, deformed, malformed, watermark, text, blurry, low quality",
+)
 # Final outputs
 FINAL_DIR = Path(os.getenv("FINAL_DIR", "data/final"))
 TMP_DIR = FINAL_DIR / "tmp"
@@ -68,8 +77,15 @@ projects: Dict[str, Dict] = {}
 project_shots: Dict[str, Dict[str, Dict]] = defaultdict(dict)
 
 
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
 def _now_iso() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _has_cjk(text: str) -> bool:
+    return bool(CJK_RE.search(text or ""))
 
 
 def _make_shot(project_id: str, order: int, shot_id: Optional[str] = None, title: str = "", prompt: str = "", transition: str = "") -> Dict:
@@ -100,10 +116,10 @@ class RenderRequest(BaseModel):
     story: str = Field(..., description="故事文本")
     style: str = Field("", description="可选风格")
     scenes: int = Field(4, ge=1, le=20, description="分镜数量")
-    width: int = Field(768, ge=256, le=2048)
-    height: int = Field(512, ge=256, le=2048)
-    img_steps: int = Field(4, ge=1, le=50)
-    cfg_scale: float = Field(1.5, ge=0.0, le=20.0)
+    width: int = Field(DEFAULT_IMG_WIDTH, ge=256, le=2048)
+    height: int = Field(DEFAULT_IMG_HEIGHT, ge=256, le=2048)
+    img_steps: int = Field(DEFAULT_IMG_STEPS, ge=1, le=50)
+    cfg_scale: float = Field(DEFAULT_CFG_SCALE, ge=0.0, le=20.0)
     images_per_scene: int = Field(1, ge=1, le=3, description="每个分镜生成的图片数量，取首张做视频，其余留作补充")
     fps: int = Field(12, ge=4, le=30)
     clip_seconds: float = Field(5.0, ge=1.0, le=30.0, description="单个分镜时长（秒）")
@@ -233,6 +249,7 @@ def _default_parameters() -> Dict:
             "shot_count": 0,
             "image_width": 0,
             "image_height": 0,
+            "negative_prompt": "",
         },
         "video": {
             "format": "",
@@ -369,6 +386,7 @@ def _parameters_from_task_envelope(raw: Dict) -> Dict:
                 "shot_count": shot_count,
                 "image_width": width,
                 "image_height": height,
+                "negative_prompt": shot.get("negative_prompt") or shot.get("negativePrompt") or "",
             },
             "video": {
                 "format": video.get("format", ""),
@@ -392,6 +410,8 @@ class ShotParam(BaseModel):
     image_width: Optional[str] = None
     image_height: Optional[str] = None
     prompt: Optional[str] = None
+    style: Optional[str] = None
+    negative_prompt: Optional[str] = Field(None, alias="negativePrompt")
 
 
 class VideoParam(BaseModel):
@@ -606,6 +626,7 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
     prompt_text: str = ctx.get("prompt_text") or ""
     story: str = ctx.get("story") or ""
     style: str = ctx.get("style") or ""
+    negative_prompt: str = (ctx.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT).strip()
     scenes: int = ctx.get("scenes") or 1
     resources: List[Dict] = []
     legacy = copy.deepcopy(_default_result().get("legacy", {}))
@@ -617,6 +638,23 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
                 payload_sb = {"story": story, "style": style, "scenes": scenes}
                 sb_data = await _call_json_api(client, LLM_URL, payload_sb)
             storyboard = sb_data.get("storyboard") or sb_data.get("shots") or []
+            if not storyboard:
+                raise RuntimeError("Storyboard empty")
+            if len(storyboard) < scenes:
+                base_prompt = story
+                last_item = storyboard[-1] if storyboard else {"prompt": base_prompt}
+                for extra_idx in range(len(storyboard), scenes):
+                    storyboard.append(
+                        {
+                            "id": f"s{extra_idx+1}",
+                            "prompt": last_item.get("prompt") or base_prompt,
+                            "description": last_item.get("description") or "",
+                            "narration": last_item.get("narration") or base_prompt,
+                            "title": last_item.get("title") or f"Shot {extra_idx+1}",
+                        }
+                    )
+            elif len(storyboard) > scenes:
+                storyboard = storyboard[:scenes]
             sb_path = _save_storyboard(task_id, storyboard)
             sb_res = _resource(_to_file_url(sb_path), "storyboard", f"sb_{task_id}")
             resources.append(sb_res)
@@ -633,15 +671,20 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
 
         # --- Shot (txt2img) only ---
         if task_type == TASK_TYPE_SHOT:
+            image_prompt = prompt_text or story
+            style_hint = (style or "").strip()
+            if style_hint and style_hint not in image_prompt:
+                image_prompt = f"{style_hint}, {image_prompt}"
             async with httpx.AsyncClient() as client:
                 payload_img = {
-                    "prompt": prompt_text or story,
+                    "prompt": image_prompt,
+                    "negative_prompt": negative_prompt,
                     "scene_id": "s1",
                     "style": {
-                        "width": render_req.width if render_req else 768,
-                        "height": render_req.height if render_req else 512,
-                        "num_inference_steps": render_req.img_steps if render_req else 4,
-                        "guidance_scale": render_req.cfg_scale if render_req else 1.5,
+                        "width": render_req.width if render_req else DEFAULT_IMG_WIDTH,
+                        "height": render_req.height if render_req else DEFAULT_IMG_HEIGHT,
+                        "num_inference_steps": render_req.img_steps if render_req else DEFAULT_IMG_STEPS,
+                        "guidance_scale": render_req.cfg_scale if render_req else DEFAULT_CFG_SCALE,
                     },
                 }
                 img_data = await _call_json_api(client, TXT2IMG_URL, payload_img)
@@ -731,11 +774,15 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
             for idx, item in enumerate(storyboard):
                 scene_id = item.get("scene_id") or item.get("id") or f"s{idx+1}"
                 base_prompt = item.get("prompt") or item.get("description") or ""
-                styled_prompt = f"{req.style}, {base_prompt}" if req.style else base_prompt
+                style_hint = (req.style or "").strip()
+                if style_hint and not _has_cjk(style_hint):
+                    styled_prompt = f"{style_hint}, {base_prompt}"
+                else:
+                    styled_prompt = base_prompt
                 narration_text = item.get("narration") or item.get("text") or base_prompt
                 if scene_assets:
                     prev_raw = scene_assets[-1].get("raw_prompt") or scene_assets[-1].get("prompt") or ""
-                    continuity = f" 延续上一镜头的场景氛围：{prev_raw}"
+                    continuity = f" consistent with previous shot mood: {prev_raw}" if prev_raw else ""
                 else:
                     continuity = ""
                 scene_assets.append(
@@ -760,6 +807,7 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
                 scene_images: List[Dict] = []
                 payload_img = {
                     "prompt": scene["prompt"],
+                    "negative_prompt": negative_prompt,
                     "scene_id": scene["scene_id"],
                     "style": {
                         "width": req.width,
@@ -810,7 +858,7 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
                         client,
                         IMG2VID_URL,
                         payload_vid,
-                        timeout=float(os.getenv("IMG2VID_TIMEOUT", "120")),
+                        timeout=float(os.getenv("IMG2VID_TIMEOUT", "240")),
                     )
                     video = vid_data.get("video")
                     if not video:
@@ -1025,8 +1073,9 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
 
     # Map incoming payload to internal RenderRequest
     story = shot_defaults.story_text or shot.prompt or req.message or "story"
-    style = shot_defaults.style or ""
+    style = shot.style or shot_defaults.style or ""
     prompt_text = shot.prompt or shot_defaults.story_text or req.message or story
+    negative_prompt = shot.negative_prompt or DEFAULT_NEGATIVE_PROMPT
 
     def _to_int(val: Optional[str], default: int) -> int:
         try:
@@ -1039,8 +1088,8 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
         return max(min_val, min(max_val, num))
 
     scenes = _clamp_int(shot_defaults.shot_count, 1, 1, 20)
-    width = _clamp_int(shot.image_width, 768, 256, 2048)
-    height = _clamp_int(shot.image_height, 512, 256, 2048)
+    width = _clamp_int(shot.image_width, DEFAULT_IMG_WIDTH, 256, 2048)
+    height = _clamp_int(shot.image_height, DEFAULT_IMG_HEIGHT, 256, 2048)
     fps = _clamp_int(video.fps, 12, 4, 30)
     clip_seconds = 5.0
     frames = max(int(fps * clip_seconds), 8)
@@ -1050,8 +1099,8 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
         scenes=scenes,
         width=width,
         height=height,
-        img_steps=4,
-        cfg_scale=1.5,
+        img_steps=DEFAULT_IMG_STEPS,
+        cfg_scale=DEFAULT_CFG_SCALE,
         fps=fps,
         clip_seconds=clip_seconds,
         video_frames=frames,
@@ -1091,6 +1140,7 @@ async def generate_vi(req: GeneratePayload, background_tasks: BackgroundTasks):
             "style": style,
             "scenes": scenes,
             "prompt_text": prompt_text,
+            "negative_prompt": negative_prompt,
             "speaker": tts.voice,
             "speed": 1.0,
         },
@@ -1347,18 +1397,19 @@ async def update_shot(project_id: str, shot_id: str, background_tasks: Backgroun
             # 构建 prompt：使用 shot 的 prompt 或 title
             image_prompt = shot.get("prompt") or shot.get("title") or f"Shot {shot.get('order', 1)}"
             style = shot.get("transition") or ""  # transition 可作为风格提示
-            if style:
+            if style and not _has_cjk(style):
                 image_prompt = f"{style}, {image_prompt}"
             
             # 调用 txt2img 服务
             payload_img = {
                 "prompt": image_prompt,
+                "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
                 "scene_id": shot_id,
                 "style": {
-                    "width": 768,
-                    "height": 512,
-                    "num_inference_steps": 4,
-                    "guidance_scale": 1.5,
+                    "width": DEFAULT_IMG_WIDTH,
+                    "height": DEFAULT_IMG_HEIGHT,
+                    "num_inference_steps": DEFAULT_IMG_STEPS,
+                    "guidance_scale": DEFAULT_CFG_SCALE,
                 },
             }
             

@@ -3,6 +3,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtMultimedia
+import QtQuick.Dialogs
 
 Page {
     id: previewPage
@@ -19,6 +20,7 @@ Page {
     property string projectId: ""
     property string videoSource: ""
     property bool showStoryboardButton: false // 默认为 false
+    property string lastExportPath: ""
 
     title: "成品预览 (" + projectId + ")"
 
@@ -318,45 +320,90 @@ Page {
 
                 onClicked: {
                     if (!isExporting) {
-                        isExporting = true;
-                        exportButton.text = qsTr("导出中...");
-                        console.log("启动视频文件导出功能...");
-                        
-                        // 调用 C++ 导出方法 (如果有)
-                        if (viewModel && viewModel.exportVideo) {
-                            viewModel.exportVideo(projectId, videoSource);
-                        } else {
-                            // 模拟导出完成
-                            exportTimer.start();
+                        if (!videoSource || videoSource.length === 0) {
+                            exportErrorDialog.text = qsTr("没有可导出的视频地址");
+                            exportErrorDialog.open();
+                            return;
                         }
+                        saveDialog.open();
                     }
                 }
             }
         }
+    }
+    }
 
-        // 模拟导出完成的定时器
-        Timer {
-            id: exportTimer
-            interval: 2000
-            onTriggered: {
-                exportButton.isExporting = false;
-                exportButton.text = qsTr("导出视频");
-                exportSuccessDialog.open();
+    FileDialog {
+        id: saveDialog
+        title: qsTr("选择导出视频路径")
+        nameFilters: ["MP4 files (*.mp4)"]
+        fileMode: FileDialog.SaveFile
+        onAccepted: {
+            var selected = saveDialog.selectedFile || saveDialog.fileUrl;
+            var localPath = selected.toString().replace("file://", "");
+            if (localPath.toLowerCase().lastIndexOf(".mp4") !== localPath.length - 4) {
+                localPath = localPath + ".mp4";
             }
+            lastExportPath = localPath;
+            exportButton.isExporting = true;
+            exportButton.text = qsTr("导出中...");
+            videoExporter.exportVideo(videoSource, localPath);
+        }
+        onRejected: {
+            exportButton.isExporting = false;
+            exportButton.text = qsTr("导出视频");
         }
     }
+
+    Connections {
+        target: videoExporter
+        onExportFinished: {
+            exportButton.isExporting = false;
+            exportButton.text = qsTr("导出视频");
+            exportSuccessDialog.text = qsTr("视频已成功导出到本地！\n\n文件位置: %1").arg(lastExportPath);
+            exportSuccessDialog.open();
+        }
+        onExportFailed: {
+            exportButton.isExporting = false;
+            exportButton.text = qsTr("导出视频");
+            exportErrorDialog.text = error;
+            exportErrorDialog.open();
+        }
     }
 
-    // 导出成功对话框
     Dialog {
         id: exportSuccessDialog
         title: qsTr("导出成功")
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Ok
+        property string text: ""
+        background: Rectangle {
+            radius: 12
+            color: macCard
+            border.color: macBorder
+        }
+        contentItem: Label {
+            text: exportSuccessDialog.text
+            wrapMode: Text.WordWrap
+            width: 280
+        }
+    }
 
-        Label {
-            text: qsTr("视频已成功导出到本地！\n\n文件位置: ~/Downloads/")
+    Dialog {
+        id: exportErrorDialog
+        title: qsTr("导出失败")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok
+        property string text: ""
+        background: Rectangle {
+            radius: 12
+            color: macCard
+            border.color: macBorder
+        }
+        contentItem: Label {
+            text: exportErrorDialog.text
             wrapMode: Text.WordWrap
             width: 280
         }

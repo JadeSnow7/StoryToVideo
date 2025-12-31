@@ -66,7 +66,20 @@ func UploadVideo(localPath string, taskID string) (string, error) {
 		return "", fmt.Errorf("生成签名 URL 失败: %w", err)
 	}
 
-	return presignedURL.String(), nil // 修改这里：返回 presignedURL.String()
+	// 如果配置了 Domain，替换 URL 中的 Host
+	finalURL := presignedURL.String()
+	if cfg.Domain != "" {
+		u, err := url.Parse(finalURL)
+		if err == nil {
+			domainURL, err := url.Parse(cfg.Domain)
+			if err == nil {
+				u.Scheme = domainURL.Scheme
+				u.Host = domainURL.Host
+				finalURL = u.String()
+			}
+		}
+	}
+	return finalURL, nil
 }
 
 // UploadToMinIO 通用上传函数，从 io.Reader 上传到 MinIO，返回可访问的 URL
@@ -148,6 +161,22 @@ func UploadToMinIO(reader io.Reader, objectName string, size int64) (string, err
 		return "", fmt.Errorf("生成签名 URL 失败: %w", err)
 	}
 
+	// 如果配置了 Domain，替换 URL 中的 Host
+	finalURL := presignedURL.String()
+	if cfg.Domain != "" {
+		// 解析原始 URL
+		u, err := url.Parse(finalURL)
+		if err == nil {
+			// 解析 DomainURL
+			domainURL, err := url.Parse(cfg.Domain)
+			if err == nil {
+				u.Scheme = domainURL.Scheme
+				u.Host = domainURL.Host
+				finalURL = u.String()
+			}
+		}
+	}
+
 	log.Printf("文件已上传: %s", objectName)
-	return presignedURL.String(), nil // 修改这里：返回 presignedURL.String()
+	return finalURL, nil
 }

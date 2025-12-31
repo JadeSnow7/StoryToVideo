@@ -40,10 +40,23 @@ func UpdateShot(c *gin.Context) {
 		Title      string `form:"title" json:"title"`
 		Prompt     string `form:"prompt" json:"prompt"`
 		Transition string `form:"transition" json:"transition"`
+		Style      string `form:"style" json:"style"`
 	}
-	if err := c.ShouldBindQuery(&req); err != nil {
+	body, err := c.GetRawData()
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		if err := c.ShouldBindQuery(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// 确保分镜存在
@@ -88,6 +101,13 @@ func UpdateShot(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新分镜失败: " + err.Error()})
 		return
 	}
+	style := req.Style
+	if style == "" {
+		if project, err := models.GetProjectByID(projectID); err == nil {
+			style = project.Style
+		}
+	}
+
 	// 创建重新生成分镜的任务（使用 models.TaskTypeShotImage）
 	// Prompt 优先使用请求中的值，否则使用数据库中已有值（调用方已确保存在）
 	prompt := req.Prompt
@@ -102,7 +122,7 @@ func UpdateShot(c *gin.Context) {
 		Parameters: models.TaskParameters{
 			Shot: &models.ShotParams{
 				ShotId:      shotID,
-				Style:       "",
+				Style:       style,
 				Prompt:      prompt,
 				ImageLLM:    "",
 				GenerateTTS: false,
@@ -236,10 +256,13 @@ func GenerateShotVideo(c *gin.Context) {
 	if err := c.ShouldBind(&req); err != nil {
 	}
 
-	if req.ShotID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "shot_id is required"})
-		return
-	}
+	// 允许 shot_id 为空（表示生成整个项目的视频）
+	/*
+		if req.ShotID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "shot_id is required"})
+			return
+		}
+	*/
 
 	// 1. 创建任务对象
 	task := models.Task{
@@ -259,6 +282,21 @@ func GenerateShotVideo(c *gin.Context) {
 		},
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
+	}
+
+	// 如果是以项目为维度的视频生成 (ShotID 为空)，我们需要填充 ShotDefaults (StoryText, Style 等)
+	// 供 Gateway 的 "Full video pipeline" 使用 (重新生成 Storyboard/Assets)
+	if req.ShotID == "" {
+		project, err := models.GetProjectByID(projectID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found for video generation: " + err.Error()})
+			return
+		}
+		task.Parameters.ShotDefaults = &models.ShotDefaultsParams{
+			StoryText: project.StoryText,
+			Style:     project.Style,
+			ShotCount: project.ShotCount,
+		}
 	}
 
 	// 2. 存入数据库

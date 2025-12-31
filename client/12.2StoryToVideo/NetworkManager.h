@@ -9,6 +9,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include "ApiConfig.h"
+
 class NetworkManager : public QObject {
   Q_OBJECT
 public:
@@ -61,8 +63,11 @@ private:
 
   // 本地 Docker 部署 - 直连 Mac 本机 8080 端口
   // API 路径: /v1/api/projects, /v1/api/tasks/{id}
-  const QUrl PROJECT_API_URL = QUrl("http://127.0.0.1:8080/v1/api/projects");
-  const QUrl TASK_API_BASE_URL = QUrl("http://127.0.0.1:8080/v1/api/tasks");
+  const QString m_apiBaseUrl = ApiConfig::apiBaseUrl();
+  const QUrl PROJECT_API_URL =
+      QUrl(m_apiBaseUrl + "/v1/api/projects");
+  const QUrl TASK_API_BASE_URL =
+      QUrl(m_apiBaseUrl + "/v1/api/tasks");
 
   enum RequestType {
     CreateProjectDirect = 1,

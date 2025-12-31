@@ -10,12 +10,15 @@
 #include <QVariantMap>
 
 class NetworkManager;
+class QNetworkAccessManager;
 
 class ViewModel : public QObject {
   Q_OBJECT
 
 public:
   explicit ViewModel(QObject *parent = nullptr);
+
+  Q_PROPERTY(QString apiBaseUrl READ apiBaseUrl CONSTANT)
 
   Q_INVOKABLE void generateStoryboard(const QString &storyText,
                                       const QString &style,
@@ -24,13 +27,21 @@ public:
   Q_INVOKABLE void generateShotImage(const QString &shotId,
                                      const QString &prompt,
                                      const QString &transition);
+  Q_INVOKABLE void refreshShots(const QString &projectId);
   Q_INVOKABLE void
   loadProject(const QString &folderPath); // [新增] 加载现有项目
 
+  Q_INVOKABLE bool isGenerationInProgress(const QString &storyId);
+  Q_INVOKABLE QString getProjectVideoLocalPath(const QString &storyId);
+
+  QString apiBaseUrl() const;
+
 signals:
   void storyboardGenerated(const QVariant &storyData);
+  void shotListUpdated(const QVariant &storyData);
   void generationFailed(const QString &errorMsg);
   void imageGenerationFinished(const QString &shotId, const QString &imageUrl);
+  void videoGenerationFinished(const QString &storyId, const QString &videoUrl);
   void compilationProgress(const QString &storyId, int percent);
 
 private slots:
@@ -66,6 +77,7 @@ private:
   QString m_projectId;        // 当前项目的 ID
   QString m_textTaskId;       // 当前文本任务的 ID (用于轮询 Stage 1)
   QVariantList m_shotTaskIds; // 依赖于文本任务的 Shot Task IDs 列表
+  bool m_autoShotPollingStarted = false;
 
   // 存储所有正在轮询的任务 ID -> 对应的 QML ID (用于 Stage 1, 2, 视频)
   QHash<QString, QVariantMap> m_activeTasks;
@@ -73,6 +85,10 @@ private:
   // [新增] 用于持久化存储的项目数据
   QVariantMap m_currentProjectData;
   QString m_projectFolderPath;
+  QString m_apiBaseUrl;
+  QNetworkAccessManager *m_assetDownloader;
+  QString m_refreshProjectId;
+  bool m_forceShotListUpdate = false;
 
   // 私有辅助函数
   void processStoryboardResult(const QString &taskId,
@@ -80,6 +96,7 @@ private:
   void processImageResult(const QString &shotId, const QVariantMap &resultData);
   void processVideoResult(const QString &storyId,
                           const QVariantMap &resultData);
+  void autoSaveVideoToProject(const QString &videoUrl);
 };
 
 #endif // VIEWMODEL_H

@@ -48,7 +48,13 @@ Page {
     Connections {
         target: viewModel
 
-        onStoryboardGenerated: {
+        function onStoryboardGenerated(storyData) {
+            if (!isGenerating) {
+                return;
+            }
+            if (StackView.view && StackView.view.currentItem !== createPage) {
+                return;
+            }
             isGenerating = false;
             var storyId = storyData.id;
             var storyTitle = storyData.title;
@@ -79,6 +85,8 @@ Page {
                     storyId: storyId,
                     storyTitle: storyTitle,
                     shotsData: shotsList, // 传递分镜列表数据
+                    videoPath: storyData.videoPath || "",
+                    videoLocalPath: storyData.videoLocalPath || "",
                     stackViewRef: pageStack
                 });
                 console.log("导航成功，已跳转到 StoryboardPage。");
@@ -87,7 +95,7 @@ Page {
             }
         }
 
-        onGenerationFailed: {
+        function onGenerationFailed(errorMsg) {
             isGenerating = false;
             generationProgress = 0;
             statusMessage = "";

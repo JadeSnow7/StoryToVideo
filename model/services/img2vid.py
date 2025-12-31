@@ -21,7 +21,7 @@ MODEL_ID = os.getenv("MODEL_ID", "stabilityai/stable-video-diffusion-img2vid")
 DEVICE = os.getenv("DEVICE", "cuda")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/clips"))
 MAX_FRAMES = max(int(os.getenv("SVD_MAX_FRAMES", "12")), 8)
-DEFAULT_STEPS = max(int(os.getenv("SVD_STEPS", "8")), 5)
+DEFAULT_STEPS = max(int(os.getenv("SVD_STEPS", "8")), 4)
 # Clamp the longer side of the input frame to keep VRAM under control (divisible by 8 for UNet)
 MAX_SIDE = max(int(os.getenv("SVD_MAX_SIDE", "512")), 256)
 CPU_OFFLOAD = os.getenv("SVD_CPU_OFFLOAD", "1") != "0"

@@ -1,0 +1,10 @@
+# frpc config for Docker environment
+# This file is kept minimal - model's frpc handles the STCP proxy
+
+serverAddr = "frps"
+serverPort = 7000
+auth.method = "token"
+auth.token = "Story2Video"
+
+# No proxies needed here - model's frpc registers server-8080-stcp
+# and web proxy is not needed since port 8080 is directly exposed

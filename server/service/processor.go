@@ -9,8 +9,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"StoryToVideo-server/config"
@@ -117,10 +120,16 @@ func (p *Processor) StartProcessor(concurrency int) {
 	mux.HandleFunc(TypeGenerateTask, p.HandleGenerateTask)
 
 	log.Printf("Starting Task Processor with concurrency %d...", concurrency)
+	if err := srv.Start(mux); err != nil {
+		log.Fatalf("could not start server: %v", err)
+	}
 	go func() {
-		if err := srv.Run(mux); err != nil {
-			log.Fatalf("could not run server: %v", err)
-		}
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		sig := <-sigCh
+		log.Printf("Shutting down Task Processor (signal: %s)...", sig)
+		srv.Shutdown()
+		os.Exit(0)
 	}()
 }
 
@@ -235,7 +244,7 @@ func (p *Processor) HandleGenerateTask(ctx context.Context, t *asynq.Task) error
 	// 确保在本函数结束时注销
 	defer UnregisterPollCancel(task.ID)
 
-	taskResult, err := p.pollJobResult(pollCtx, jobID)
+	taskResult, err := p.pollJobResult(pollCtx, jobID, task.ID)
 	if err != nil {
 		log.Printf("轮询任务失败: %v", err)
 		task.UpdateStatus(p.DB, models.TaskStatusFailed, nil, fmt.Sprintf("Job Failed: %v", err))
@@ -254,7 +263,7 @@ func (p *Processor) HandleGenerateTask(ctx context.Context, t *asynq.Task) error
 		if shotId == "" && task.Parameters.Shot != nil {
 			shotId = task.Parameters.Shot.ShotId
 		}
-		processingErr = p.handleImageResult(shotId, taskResult)
+		processingErr = p.handleImageResult(shotId, task.ID, taskResult)
 
 	case models.TaskTypeProjectAudio: // 文本 -> 语音
 		shotId := task.ShotId
@@ -264,8 +273,11 @@ func (p *Processor) HandleGenerateTask(ctx context.Context, t *asynq.Task) error
 		processingErr = p.handleTTSResult(shotId, taskResult)
 
 	case models.TaskTypeVideoGen: // 图 -> 视频
-		shotId := task.Parameters.Shot.ShotId
-		processingErr = p.handleVideoResult(shotId, taskResult)
+		shotId := task.ShotId
+		if shotId == "" && task.Parameters.Shot != nil {
+			shotId = task.Parameters.Shot.ShotId
+		}
+		processingErr = p.handleVideoResult(shotId, task.ProjectId, task.ID, taskResult)
 
 	default:
 		processingErr = fmt.Errorf("unknown task type: %s", task.Type)
@@ -518,7 +530,7 @@ func (p *Processor) dispatchWorkerRequest(task *models.Task) (string, error) {
 }
 
 // pollJobResult 轮询 GET /v1/jobs/{job_id} 直到完成，返回 TaskResult
-func (p *Processor) pollJobResult(ctx context.Context, jobID string) (*models.TaskResult, error) {
+func (p *Processor) pollJobResult(ctx context.Context, jobID string, taskID string) (*models.TaskResult, error) {
 	jobURL := fmt.Sprintf("%s/v1/jobs/%s", p.WorkerEndpoint, jobID)
 
 	timeoutDuration := 30 * time.Minute
@@ -527,6 +539,8 @@ func (p *Processor) pollJobResult(ctx context.Context, jobID string) (*models.Ta
 	defer ticker.Stop()
 
 	httpClient := &http.Client{} // 可配置 Transport/Timeout
+	lastProgress := -1
+	lastMessage := ""
 
 	for {
 		select {
@@ -631,6 +645,34 @@ func (p *Processor) pollJobResult(ctx context.Context, jobID string) (*models.Ta
 				UpdatedAt:         parseTime(raw.UpdatedAt),
 			}
 			resp.Body.Close()
+
+			if taskID != "" && (taskResp.Progress != lastProgress || taskResp.Message != lastMessage) {
+				lastProgress = taskResp.Progress
+				lastMessage = taskResp.Message
+				progress := taskResp.Progress
+				if progress < 0 {
+					progress = 0
+				} else if progress > 100 {
+					progress = 100
+				}
+				var messagePtr *string
+				if taskResp.Message != "" {
+					message := taskResp.Message
+					messagePtr = &message
+				}
+				if err := models.UpdateTaskStatus(
+					taskID,
+					models.TaskStatusProcessing,
+					&progress,
+					messagePtr,
+					nil,
+					nil,
+					nil,
+					nil,
+				); err != nil {
+					log.Printf("更新任务进度失败: %v", err)
+				}
+			}
 
 			status := taskResp.Status
 			if status == models.TaskStatusSuccess || status == "success" || status == "completed" || status == "succeeded" {
@@ -836,7 +878,8 @@ func (p *Processor) handleStoryboardResult(projectID string, result *models.Task
 }
 
 // 处理图像生成结果 -> 更新 ImagePath
-func (p *Processor) handleImageResult(shotID string, result *models.TaskResult) error {
+// taskID 用于版本化 MinIO 对象名，便于追踪和避免缓存问题
+func (p *Processor) handleImageResult(shotID string, taskID string, result *models.TaskResult) error {
 	shotID = strings.TrimSpace(shotID)
 	// ==== 新增：基本校验与净化 ====
 	if shotID == "" {
@@ -855,7 +898,7 @@ func (p *Processor) handleImageResult(shotID string, result *models.TaskResult) 
 
 	// 优先从 resource_url 获取
 	if result.ResourceUrl != "" {
-		objectName := fmt.Sprintf("shots/%s/image.png", shotID)
+		objectName := fmt.Sprintf("shots/%s/image_%s.png", shotID, taskID)
 		finalURL, err = processResourceToMinIO(result, objectName)
 		if err != nil {
 			return fmt.Errorf("处理图片资源失败: %v", err)
@@ -873,7 +916,7 @@ func (p *Processor) handleImageResult(shotID string, result *models.TaskResult) 
 		downloadUrl := p.getWorkerFileUrl(remotePath)
 		log.Printf("正在从 Worker 下载图片: %s", downloadUrl)
 
-		objectName := fmt.Sprintf("shots/%s/image.png", shotID)
+		objectName := fmt.Sprintf("shots/%s/image_%s.png", shotID, taskID)
 		finalURL, err = downloadAndUploadToMinIO(downloadUrl, objectName)
 		if err != nil {
 			return fmt.Errorf("处理图片失败 (下载URL: %s): %v", downloadUrl, err)
@@ -891,7 +934,10 @@ func (p *Processor) handleImageResult(shotID string, result *models.TaskResult) 
 	}
 
 	log.Printf("图片 %s 上传成功: %s", shotID, finalURL)
-
+	if result != nil {
+		result.ResourceUrl = finalURL
+		result.ResourceType = "image"
+	}
 	return shot.UpdateImage(p.DB, finalURL)
 }
 
@@ -923,13 +969,40 @@ func (p *Processor) handleTTSResult(shotId string, result *models.TaskResult) er
 }
 
 // 处理视频生成结果 -> 更新 VideoUrl
-func (p *Processor) handleVideoResult(shotID string, result *models.TaskResult) error {
+func (p *Processor) handleVideoResult(shotID string, projectID string, taskID string, result *models.TaskResult) error {
 	var finalURL string
 	var err error
 	shotID = strings.TrimSpace(shotID)
-	// ==== 新增：基本校验与净化 ====
 	if shotID == "" {
-		return fmt.Errorf("missing shot id for image task")
+		projectID = strings.TrimSpace(projectID)
+		if projectID == "" {
+			return fmt.Errorf("missing project id for video task")
+		}
+		// Project-level video
+		if result.ResourceUrl != "" {
+			objectName := fmt.Sprintf("projects/%s/video_%s.mp4", projectID, taskID)
+			finalURL, err = processResourceToMinIO(result, objectName)
+			if err != nil {
+				return fmt.Errorf("处理视频资源失败: %v", err)
+			}
+		} else if result.TaskVideo != nil && result.TaskVideo.Path != "" {
+			downloadUrl := p.getWorkerFileUrl(result.TaskVideo.Path)
+			log.Printf("正在从 Worker 下载视频: %s", downloadUrl)
+			objectName := fmt.Sprintf("projects/%s/video_%s.mp4", projectID, taskID)
+			finalURL, err = downloadAndUploadToMinIO(downloadUrl, objectName)
+			if err != nil {
+				return fmt.Errorf("处理视频失败: %v", err)
+			}
+		} else {
+			return fmt.Errorf("视频路径为空: resource_url 和 task_video.path 均无有效数据")
+		}
+		result.ResourceUrl = finalURL
+		log.Printf("项目视频上传成功: %s", finalURL)
+		return p.DB.Model(&models.Project{}).Where("id = ?", projectID).Updates(map[string]interface{}{
+			"video_url":  finalURL,
+			"status":     models.ProjectStatusVideoGenerated,
+			"updated_at": time.Now(),
+		}).Error
 	}
 	// 替换可能的路径分隔符/非法片段，防止把完整路径或 URL 当作对象名段
 	shotID = strings.ReplaceAll(shotID, "/", "-")

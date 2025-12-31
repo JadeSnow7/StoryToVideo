@@ -1,0 +1,23 @@
+server:
+  port: ":8080"
+mysql:
+  dsn: "root:12345678@tcp(mysql:3306)/storydb2?charset=utf8mb4&parseTime=True&loc=Local"
+ai:
+  image_api: "http://172.23.197.11:8000/txt2img"
+  voice_api: "http://172.23.197.11:8000/tts"
+
+redis:
+  addr: "redis:6379"  
+  password: ""            
+  db: 0                   
+
+worker:
+  addr: "http://host.docker.internal:8000"
+  timeout_minutes: 20 
+minio:
+    endpoint: "172.23.197.68:9000"
+    access_key: "story2video"
+    secret_key: "s2v_secret"
+    bucket: "story2video"
+    use_ssl: false
+    domain: "http://172.23.197.68:9000"

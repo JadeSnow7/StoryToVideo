@@ -1,13 +1,18 @@
 #include "ViewModel.h"
+#include "ApiConfig.h"
 #include "NetworkManager.h"
 #include "datamanager.h" // [修正] 大小写匹配文件名
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QStandardPaths> // [新增]
 #include <QTimer>
 #include <QUrl>
@@ -21,6 +26,8 @@
 ViewModel::ViewModel(QObject *parent) : QObject(parent) {
   m_networkManager = new NetworkManager(this);
   m_pollingTimer = new QTimer(this);
+  m_apiBaseUrl = ApiConfig::apiBaseUrl();
+  m_assetDownloader = new QNetworkAccessManager(this);
 
   // 连接 NetworkManager 的信号
   connect(m_networkManager, &NetworkManager::textTaskCreated, this,
@@ -48,6 +55,8 @@ ViewModel::ViewModel(QObject *parent) : QObject(parent) {
   qDebug() << "ViewModel 实例化成功。";
 }
 
+QString ViewModel::apiBaseUrl() const { return m_apiBaseUrl; }
+
 void ViewModel::generateStoryboard(const QString &storyText,
                                    const QString &style,
                                    const QString &projectName) {
@@ -66,6 +75,29 @@ void ViewModel::generateStoryboard(const QString &storyText,
 }
 
 void ViewModel::startVideoCompilation(const QString &storyId) {
+  // [并发安全]
+  // 强制清理该项目下所有已存在的旧任务（防止僵尸任务导致的进度条跳动）
+  QList<QString> keysToRemove;
+  QHashIterator<QString, QVariantMap> i(m_activeTasks);
+  while (i.hasNext()) {
+    i.next();
+    const QString currentId = i.value()["id"].toString();
+    const QString currentType = i.value()["type"].toString();
+
+    // 如果发现同一个 Project ID 的任务 (无论是 video 还是
+    // text_task)，都视为冲突/旧任务清理掉
+    if (currentId == storyId &&
+        (currentType == "video" || currentType == "text_task")) {
+      keysToRemove.append(i.key());
+      qDebug() << "WARN: Cleaning up zombie/duplicate task for Project ID:"
+               << storyId << "Task ID:" << i.key();
+    }
+  }
+
+  for (const QString &key : keysToRemove) {
+    m_activeTasks.remove(key);
+  }
+
   qDebug() << ">>> C++ 收到请求：生成视频，委托给 NetworkManager for ID:"
            << storyId;
 
@@ -79,6 +111,58 @@ void ViewModel::generateShotImage(const QString &shotId, const QString &prompt,
   m_networkManager->updateShotRequest(m_projectId, shotId, prompt, transition);
 }
 
+bool ViewModel::isGenerationInProgress(const QString &storyId) {
+  if (storyId.isEmpty()) {
+    return false;
+  }
+  QHashIterator<QString, QVariantMap> it(m_activeTasks);
+  while (it.hasNext()) {
+    it.next();
+    const QVariantMap taskInfo = it.value();
+    if (taskInfo.value("type").toString() == "video" &&
+        taskInfo.value("id").toString() == storyId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+QString ViewModel::getProjectVideoLocalPath(const QString &storyId) {
+  if (storyId.isEmpty()) {
+    return QString();
+  }
+  const QString basePath =
+      QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+  if (basePath.isEmpty()) {
+    return QString();
+  }
+  const QString projectFolder =
+      basePath + "/StoryToVideo/Project_" + storyId;
+
+  DataManager dm;
+  const QVariantMap data = dm.loadProjectFromPath(projectFolder);
+  QString localPath = data.value("videoLocalPath").toString();
+  if (localPath.isEmpty()) {
+    localPath = QDir(projectFolder).filePath("video.mp4");
+  }
+  if (!localPath.isEmpty() && QFile::exists(localPath)) {
+    return localPath;
+  }
+  return QString();
+}
+
+void ViewModel::refreshShots(const QString &projectId) {
+  const QString targetId = projectId.isEmpty() ? m_projectId : projectId;
+  if (targetId.isEmpty()) {
+    emit generationFailed("无法刷新分镜：项目 ID 为空。");
+    return;
+  }
+  qDebug() << ">>> C++ 收到请求：刷新分镜列表 Project:" << targetId;
+  m_refreshProjectId = targetId;
+  m_forceShotListUpdate = true;
+  m_networkManager->getShotListRequest(targetId);
+}
+
 void ViewModel::loadProject(const QString &folderPath) {
   qDebug() << ">>> C++ 加载项目:" << folderPath;
   DataManager dm;
@@ -88,6 +172,18 @@ void ViewModel::loadProject(const QString &folderPath) {
     emit generationFailed("无法加载项目数据 (project.json 丢失或无效)");
     return;
   }
+
+  QString cleanPath = folderPath;
+  if (cleanPath.startsWith("file://")) {
+#ifdef Q_OS_WIN
+    cleanPath = cleanPath.mid(8);
+#else
+    cleanPath = cleanPath.mid(7);
+#endif
+  }
+  m_projectFolderPath = cleanPath;
+  m_currentProjectData = data;
+  m_projectId = data.value("id").toString();
 
   emit storyboardGenerated(QVariant::fromValue(data));
 }
@@ -104,6 +200,7 @@ void ViewModel::handleTextTaskCreated(const QString &projectId,
   m_projectId = projectId;
   m_textTaskId = textTaskId;
   m_shotTaskIds = shotTaskIds;
+  m_autoShotPollingStarted = false;
 
   QVariantMap taskInfo;
   taskInfo["type"] = "text_task";
@@ -120,7 +217,7 @@ void ViewModel::handleShotListReceived(const QString &projectId,
 
   // --- 构造完整 URL 并标准化数据结构 ---
   QVariantList processedShots;
-  const QString API_BASE_URL = "http://119.45.124.222:8080";
+  const QString apiBaseUrl = m_apiBaseUrl;
 
   for (const QVariant &varShot : shots) {
     QVariantMap shotMap = varShot.toMap();
@@ -136,7 +233,7 @@ void ViewModel::handleShotListReceived(const QString &projectId,
       if (imagePath.startsWith("http", Qt::CaseInsensitive)) {
         shotMap["imageUrl"] = imagePath;
       } else {
-        shotMap["imageUrl"] = API_BASE_URL + imagePath;
+        shotMap["imageUrl"] = apiBaseUrl + imagePath;
       }
     }
 
@@ -155,6 +252,10 @@ void ViewModel::handleShotListReceived(const QString &projectId,
   // 将分镜列表发射给 QML (StoryboardPage)
   QVariantMap storyMap;
   storyMap["id"] = projectId;
+  const QString existingVideoPath =
+      m_currentProjectData.value("videoPath").toString();
+  const QString existingVideoLocalPath =
+      m_currentProjectData.value("videoLocalPath").toString();
 
   // [修正] 使用第一个分镜的标题或项目 ID 作为故事标题
   QString storyTitle = "新故事项目";
@@ -167,10 +268,31 @@ void ViewModel::handleShotListReceived(const QString &projectId,
   }
   storyMap["title"] = storyTitle;
   storyMap["shots"] = processedShots; // 传递处理后的分镜列表
+  if (!existingVideoPath.isEmpty()) {
+    storyMap["videoPath"] = existingVideoPath;
+  }
+  if (!existingVideoLocalPath.isEmpty()) {
+    storyMap["videoLocalPath"] = existingVideoLocalPath;
+  }
 
-  emit storyboardGenerated(QVariant::fromValue(storyMap));
+  const QString currentId = m_currentProjectData.value("id").toString();
+  const bool isInitialLoad = m_currentProjectData.isEmpty() ||
+                             currentId.isEmpty() || currentId != projectId;
+  const bool forceUpdate =
+      m_forceShotListUpdate &&
+      (m_refreshProjectId.isEmpty() || m_refreshProjectId == projectId);
 
-  // [新增] 持久化保存项目初始数据
+  if (forceUpdate) {
+    emit shotListUpdated(QVariant::fromValue(storyMap));
+    m_forceShotListUpdate = false;
+    m_refreshProjectId.clear();
+  } else if (isInitialLoad) {
+    emit storyboardGenerated(QVariant::fromValue(storyMap));
+  } else {
+    emit shotListUpdated(QVariant::fromValue(storyMap));
+  }
+
+  // [新增] 持久化保存项目数据
   m_currentProjectData = storyMap;
   QString basePath =
       QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
@@ -182,8 +304,29 @@ void ViewModel::handleShotListReceived(const QString &projectId,
              << m_projectFolderPath;
   }
 
-  // [TODO] 启动所有 shot_task_ids 的轮询 (Stage 2) - 真实流程需要在此处启动
-  // ...
+  // [新增] 自动启动分镜生图任务轮询 (Stage 2)
+  if (!m_autoShotPollingStarted && !m_shotTaskIds.isEmpty()) {
+    const int taskCount = m_shotTaskIds.size();
+    for (int i = 0; i < taskCount; ++i) {
+      const QString taskId = m_shotTaskIds[i].toString();
+      if (taskId.isEmpty() || m_activeTasks.contains(taskId)) {
+        continue;
+      }
+      QVariantMap taskInfo;
+      taskInfo["type"] = "shot_task";
+      if (i < processedShots.size()) {
+        const QVariantMap shot = processedShots[i].toMap();
+        taskInfo["id"] = shot.value("shotId").toString();
+      } else {
+        taskInfo["id"] = QString();
+      }
+      m_activeTasks.insert(taskId, taskInfo);
+    }
+    if (!m_activeTasks.isEmpty()) {
+      startPollingTimer();
+    }
+    m_autoShotPollingStarted = true;
+  }
 }
 
 void ViewModel::handleTaskResultReceived(const QString &taskId,
@@ -211,13 +354,33 @@ void ViewModel::handleTaskResultReceived(const QString &taskId,
     stopPollingTimer(taskId);
     m_networkManager->getShotListRequest(m_projectId); // 获取分镜列表
 
-  } else if (type == "shot_task" || type == "shot") {
+  } else if (type == "shot_task") {
+    // 初始分镜生图任务完成后，刷新分镜列表获取最新 imagePath/status
+    stopPollingTimer(taskId);
+    m_networkManager->getShotListRequest(m_projectId);
+
+  } else if (type == "shot") {
     // 分镜图片任务完成 (Stage 2 Done 或重生成)
     stopPollingTimer(taskId);
 
     // 假设这里只处理重生成任务，因为初始分镜由 GetShotListRequest 获取
     // 传递 shotId 和 resultData
-    processImageResult(taskInfo["id"].toString(), resultData);
+    QString shotId = taskInfo["id"].toString();
+    if (shotId.isEmpty()) {
+      shotId = resultData.value("shot_id").toString();
+    }
+    if (shotId.isEmpty()) {
+      shotId = resultData.value("shotId").toString();
+    }
+    if (!shotId.isEmpty()) {
+      taskInfo["id"] = shotId;
+      m_activeTasks.insert(taskId, taskInfo);
+      processImageResult(shotId, resultData);
+    } else {
+      qDebug()
+          << "Shot task finished but shotId missing; refreshing shot list.";
+      m_networkManager->getShotListRequest(m_projectId);
+    }
 
   } else if (type == "video") {
     qDebug() << "DEBUG CALL CHECK: Attempting to call processVideoResult for "
@@ -271,11 +434,12 @@ void ViewModel::handleTaskRequestFailed(const QString &taskId,
                                         const QString &errorMsg) {
   if (m_activeTasks.contains(taskId)) {
     QVariantMap taskInfo = m_activeTasks[taskId];
-    qDebug() << "任务轮询失败:" << taskId << errorMsg;
-    emit generationFailed(QString("任务 %1 失败: %2")
-                              .arg(taskInfo["id"].toString())
-                              .arg(errorMsg));
-    stopPollingTimer(taskId);
+    qDebug() << "任务轮询请求失败 (将重试):" << taskId << errorMsg;
+    // [修正] 网络波动不应直接停止轮询，仅记录日志并继续尝试
+    // 如果是 404 等严重错误，应当由 NetworkManager
+    // 判断或在此处细分，目前暂时保持重试策略 emit generationFailed(...) //
+    // 可选：暂时不弹窗打扰用户，除非连续失败多次 stopPollingTimer(taskId); //
+    // [已移除] 保持轮询
   }
 }
 
@@ -334,12 +498,21 @@ void ViewModel::processImageResult(const QString &shotId,
     return;
   }
 
-  QString qmlUrl = imagePath;
+  const QString rawPath = imagePath;
+  QString qmlUrl = rawPath;
   if (!qmlUrl.startsWith("http", Qt::CaseInsensitive)) {
-    qmlUrl = QString("http://119.45.124.222:8080%1").arg(imagePath);
+    qmlUrl = m_apiBaseUrl + rawPath;
   }
+  const QString sep = qmlUrl.contains('?') ? "&" : "?";
+  qmlUrl += QString("%1v=%2").arg(
+      sep, QString::number(QDateTime::currentMSecsSinceEpoch()));
   qDebug() << "图像重生成成功，QML URL:" << qmlUrl;
   emit imageGenerationFinished(shotId, qmlUrl);
+  QTimer::singleShot(600, this, [this]() {
+    if (!m_projectId.isEmpty()) {
+      m_networkManager->getShotListRequest(m_projectId);
+    }
+  });
 
   // [新增] 更新本地数据并保存
   if (!m_currentProjectData.isEmpty()) {
@@ -347,8 +520,10 @@ void ViewModel::processImageResult(const QString &shotId,
     bool updated = false;
     for (int i = 0; i < shots.size(); ++i) {
       QVariantMap shot = shots[i].toMap();
-      if (shot["id"].toString() == shotId) {
-        shot["imagePath"] = qmlUrl;
+      if (shot["id"].toString() == shotId ||
+          shot["shotId"].toString() == shotId) {
+        shot["imagePath"] = rawPath;
+        shot["imageUrl"] = qmlUrl;
         shots[i] = shot;
         updated = true;
         break;
@@ -358,6 +533,7 @@ void ViewModel::processImageResult(const QString &shotId,
       m_currentProjectData["shots"] = shots;
       DataManager dm;
       dm.saveProjectToPath(m_projectFolderPath, m_currentProjectData);
+      emit shotListUpdated(QVariant::fromValue(m_currentProjectData));
     }
   }
 }
@@ -394,7 +570,7 @@ void ViewModel::processVideoResult(const QString &storyId,
   // 构造完整的 URL
   QString qmlUrl = videoPath;
   if (!qmlUrl.startsWith("http", Qt::CaseInsensitive)) {
-    qmlUrl = QString("http://119.45.124.222:8080%1").arg(videoPath);
+    qmlUrl = m_apiBaseUrl + videoPath;
   }
 
   // 最终确认日志
@@ -408,8 +584,67 @@ void ViewModel::processVideoResult(const QString &storyId,
     qDebug() << "ViewModel: Project video path saved.";
   }
 
+  autoSaveVideoToProject(qmlUrl);
+
   // 发射信号给 QML
   emit compilationProgress(storyId, 100);
+  emit videoGenerationFinished(storyId, qmlUrl);
   qDebug() << "C++ DEBUG: CompilationProgress signal EMITTED for ID:"
            << storyId;
+}
+
+void ViewModel::autoSaveVideoToProject(const QString &videoUrl) {
+  if (videoUrl.isEmpty()) {
+    return;
+  }
+  if (m_projectFolderPath.isEmpty()) {
+    qDebug() << "Auto-save skipped: project folder path is empty.";
+    return;
+  }
+
+  QDir dir(m_projectFolderPath);
+  if (!dir.exists() && !dir.mkpath(".")) {
+    qDebug() << "Auto-save failed: cannot create project folder:"
+             << m_projectFolderPath;
+    return;
+  }
+
+  const QString localPath = dir.filePath("video.mp4");
+  QNetworkRequest request((QUrl(videoUrl)));
+  QNetworkReply *reply = m_assetDownloader->get(request);
+  QFile *file = new QFile(localPath, reply);
+  if (!file->open(QIODevice::WriteOnly)) {
+    qDebug() << "Auto-save failed: cannot write file:" << localPath;
+    reply->abort();
+    file->deleteLater();
+    reply->deleteLater();
+    return;
+  }
+
+  connect(reply, &QIODevice::readyRead, this,
+          [reply, file]() { file->write(reply->readAll()); });
+
+  connect(reply, &QNetworkReply::finished, this,
+          [this, reply, file, localPath]() {
+            if (reply->error() != QNetworkReply::NoError) {
+              qDebug() << "Auto-save failed:" << reply->errorString();
+              file->close();
+              file->remove();
+              file->deleteLater();
+              reply->deleteLater();
+              return;
+            }
+
+            file->flush();
+            file->close();
+            file->deleteLater();
+            reply->deleteLater();
+
+            if (!m_currentProjectData.isEmpty()) {
+              m_currentProjectData["videoLocalPath"] = localPath;
+              DataManager dm;
+              dm.saveProjectToPath(m_projectFolderPath, m_currentProjectData);
+            }
+            qDebug() << "Auto-save complete:" << localPath;
+          });
 }

@@ -48,6 +48,8 @@ Page {
                     storyId: data.id,
                     storyTitle: data.title || "加载的项目",
                     shotsData: data.shots || [], // [修正] 匹配 StoryboardPage 的 shotsData 属性
+                    videoPath: data.videoPath || "",
+                    videoLocalPath: data.videoLocalPath || "",
                     stackViewRef: pageStack     // [重要] 传递 stackViewRef 用于后续导航
                 });
             }
@@ -349,4 +351,3 @@ Page {
         }
     }
 }
-

@@ -23,8 +23,8 @@ pipe = None  # lazy loaded
 
 
 class ImageStyle(BaseModel):
-    width: int = Field(768, ge=256, le=2048)
-    height: int = Field(512, ge=256, le=2048)
+    width: int = Field(512, ge=256, le=2048)
+    height: int = Field(384, ge=256, le=2048)
     num_inference_steps: int = Field(4, ge=1, le=20)
     guidance_scale: float = Field(1.5, ge=0.0, le=10.0)
 

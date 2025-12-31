@@ -25,6 +25,8 @@ Page {
     property string editablePrompt: ""
     property string editableNarration: ""
     property string selectedTransition: "cut"
+    property bool isGenerating: false
+    property int imageRetryCount: 0
 
     // 使用属性值作为页面标题
     title: qsTr("分镜详情")
@@ -50,6 +52,29 @@ Page {
 
         } else {
             console.error("❌ 数据初始化失败：shotData 为空或未包含 shotId。");
+        }
+    }
+
+    Connections {
+        target: viewModel
+
+        function onImageGenerationFinished(shotId, imageUrl) {
+            if (shotData && shotData.shotId === shotId) {
+                isGenerating = false;
+                imageRetryCount = 0;
+                shotData = Object.assign({}, shotData, {
+                    imageUrl: imageUrl,
+                    status: "generated"
+                });
+                shotImage.source = imageUrl;
+            }
+        }
+
+        function onGenerationFailed(errorMsg) {
+            if (isGenerating) {
+                isGenerating = false;
+                console.error("生成失败:", errorMsg);
+            }
         }
     }
 
@@ -89,7 +114,10 @@ Page {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         console.log("=== 顶部返回按钮点击 ===");
-                        pageStack.pop();
+                        var stackView = resolveStackView();
+                        if (stackView) {
+                            stackView.pop();
+                        }
                     }
                 }
             }
@@ -135,13 +163,27 @@ Page {
                 // 注意：这里使用 shotData.imageUrl，确保数据属性名一致
                 source: (shotData && shotData.imageUrl) ? shotData.imageUrl : ""
                 fillMode: Image.PreserveAspectFit
+                cache: false
+                onSourceChanged: imageRetryCount = 0
+                onStatusChanged: {
+                    if (status === Image.Error && shotData && shotData.imageUrl && imageRetryCount < 3) {
+                        imageRetryCount += 1;
+                        retryTimer.restart();
+                    }
+                }
 
                 Text {
-                    visible: shotImage.status !== Image.Ready
+                    visible: shotImage.status !== Image.Ready && !isGenerating
                     text: qsTr("图像加载中...")
                     anchors.centerIn: parent
                     color: macTextSecondary
                     font.family: macBodyFont
+                }
+
+                BusyIndicator {
+                    anchors.centerIn: parent
+                    running: isGenerating
+                    visible: isGenerating
                 }
             }
         }
@@ -210,6 +252,7 @@ Page {
             Layout.fillWidth: true
             Layout.preferredHeight: 44
             radius: 14
+            opacity: isGenerating ? 0.7 : 1.0
             gradient: Gradient {
                 GradientStop { position: 0.0; color: "#4A8BFF" }
                 GradientStop { position: 1.0; color: "#2D6BFF" }
@@ -217,7 +260,7 @@ Page {
 
             Text {
                 anchors.centerIn: parent
-                text: qsTr("触发文生图任务 (生成图像)")
+                text: isGenerating ? qsTr("生成中...") : qsTr("触发文生图任务 (生成图像)")
                 color: "white"
                 font.pixelSize: 15
                 font.bold: true
@@ -227,12 +270,20 @@ Page {
             MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
+                enabled: !isGenerating
                 onClicked: {
                     console.log("=== 生成按钮点击事件触发 ===");
                     console.log("shotData.shotId:", shotData.shotId);
                     console.log("editablePrompt:", editablePrompt);
                     
                     if (shotData.shotId) {
+                        isGenerating = true;
+                        imageRetryCount = 0;
+                        shotData = Object.assign({}, shotData, {
+                            status: "processing"
+                        });
+                        // [修改] 不清空 source，保持旧图显示直到新图加载
+                        // shotImage.source = ""; 
                         viewModel.generateShotImage(
                             shotData.shotId,
                             editablePrompt,
@@ -269,11 +320,26 @@ Page {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                     console.log("=== 返回按钮点击 ===");
-                    pageStack.pop();
+                    var stackView = resolveStackView();
+                    if (stackView) {
+                        stackView.pop();
+                    }
                 }
             }
         }
     }
+    }
+
+    Timer {
+        id: retryTimer
+        interval: 800
+        repeat: false
+        onTriggered: {
+            if (shotData && shotData.imageUrl) {
+                var sep = shotData.imageUrl.indexOf("?") >= 0 ? "&" : "?";
+                shotImage.source = shotData.imageUrl + sep + "retry=" + Date.now();
+            }
+        }
     }
 
     // ========== 状态映射辅助函数 ==========
@@ -281,6 +347,7 @@ Page {
         switch (status) {
             case "finished":
             case "generated":
+            case "completed": // [新增]
                 return "#4CAF50";  // 绿色
             case "pending":
             case "running":
@@ -298,6 +365,7 @@ Page {
         switch (status) {
             case "finished":
             case "generated":
+            case "completed": // [新增]
                 return qsTr("已完成");
             case "pending":
                 return qsTr("待处理");
@@ -310,5 +378,15 @@ Page {
             default:
                 return qsTr("未知");
         }
+    }
+
+    function resolveStackView() {
+        if (typeof pageStack !== "undefined" && pageStack) {
+            return pageStack;
+        }
+        if (StackView.view) {
+            return StackView.view;
+        }
+        return null;
     }
 }

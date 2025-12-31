@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: storytovideo-server
+    ports:
+      - "8080:8080"
+    environment:
+      - MYSQL_DSN=root:12345678@tcp(mysql:3306)/storydb2?charset=utf8mb4&parseTime=True&loc=Local
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - ./server/config/config.docker.yaml:/app/config/config.yaml:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - storytovideo-net
+
+  mysql:
+    image: mysql:8.0
+    container_name: storytovideo-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 12345678
+      MYSQL_DATABASE: storydb2
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server/doc/sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-p12345678" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: storytovideo-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: storytovideo-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: story2video
+      MINIO_ROOT_PASSWORD: s2v_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  frps:
+    image: fatedier/frps:v0.64.0
+    container_name: storytovideo-frps
+    volumes:
+      - ./frp/frps.toml:/etc/frp/frps.toml
+    command: [ "-c", "/etc/frp/frps.toml" ]
+    ports:
+      - "7000:7000"
+      - "18000:18000"
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  frpc:
+    image: fatedier/frpc:v0.64.0
+    container_name: storytovideo-frpc
+    volumes:
+      - ./frp/frpc.docker.toml:/etc/frp/frpc.toml
+    command: [ "-c", "/etc/frp/frpc.toml" ]
+    depends_on:
+      - frps
+      - server
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+volumes:
+  mysql_data:
+  minio_data:
+
+
+networks:
+  storytovideo-net:
+    driver: bridge

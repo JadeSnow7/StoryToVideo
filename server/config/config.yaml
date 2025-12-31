@@ -20,4 +20,4 @@ minio:
     secret_key: "s2v_secret"
     bucket: "story2video"
     use_ssl: false
-    domain: "http://172.23.197.68:9000"
+    domain: "http://127.0.0.1:9000"

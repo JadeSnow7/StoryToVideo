@@ -78,9 +78,10 @@ Page {
         id: saveDialog
         title: "选择导出视频路径"
         nameFilters: ["MP4 files (*.mp4)"]
-        selectExisting: false
+        fileMode: FileDialog.SaveFile
         onAccepted: {
-            var localPath = fileUrl.replace("file:///", "")
+            var selected = saveDialog.selectedFile || saveDialog.fileUrl
+            var localPath = selected.toString().replace("file:///", "")
             videoExporter.exportVideo(videoPath, localPath)
         }
     }

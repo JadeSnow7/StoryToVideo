@@ -50,7 +50,7 @@ void NetworkManager::createProjectDirect(const QString &title,
 
 // --- 2. 资源获取 API：获取分镜列表 (GET /v1/api/projects/:id/shots) ---
 void NetworkManager::getShotListRequest(const QString &projectId) {
-  // GET http://119.45.124.222:8081/v1/api/projects/:projectId/shots
+  // GET {apiBaseUrl}/v1/api/projects/:projectId/shots
   QUrl queryUrl = PROJECT_API_URL.toString() + "/" + projectId + "/shots";
   qDebug() << "发送 GetShotList 请求 for Project ID:" << projectId;
 
@@ -227,6 +227,10 @@ void NetworkManager::onNetworkReplyFinished(QNetworkReply *reply) {
     if (status == "finished") {
       // 任务完成，提取 result 字段
       QVariantMap resultMap = taskObj["result"].toObject().toVariantMap();
+      const QString shotId = taskObj["shotId"].toString();
+      if (!shotId.isEmpty()) {
+        resultMap["shot_id"] = shotId;
+      }
       emit taskResultReceived(taskId, resultMap);
     } else {
       // 任务进行中

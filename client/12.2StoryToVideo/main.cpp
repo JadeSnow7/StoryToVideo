@@ -5,7 +5,7 @@
 #include <QDir>
 #include <QQuickStyle>
 #include "ViewModel.h"
-#include "DataManager.h" // 引入你的本地存储管理类
+#include "datamanager.h" // 引入你的本地存储管理类
 #include "videoexporter.h"
 
 int main(int argc, char *argv[])

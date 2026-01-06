@@ -18,6 +18,55 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+# Import from new schema modules (incremental migration)
+from gateway.schemas.task import (
+    TASK_STATUS_PENDING,
+    TASK_STATUS_BLOCKED,
+    TASK_STATUS_PROCESSING,
+    TASK_STATUS_FINISHED,
+    TASK_STATUS_FAILED,
+    TASK_STATUS_CANCELLED,
+    TASK_TYPE_STORYBOARD,
+    TASK_TYPE_SHOT,
+    TASK_TYPE_AUDIO,
+    TASK_TYPE_VIDEO,
+    TaskState,
+    TaskSchema as TaskSchemaNew,
+    TaskParameters as TaskParametersNew,
+    TaskShotParameters as TaskShotParametersNew,
+    TaskVideoParameters as TaskVideoParametersNew,
+    TaskResult as TaskResultNew,
+    TaskShotsResult as TaskShotsResultNew,
+    TaskAudioResult as TaskAudioResultNew,
+    TaskVideoResult as TaskVideoResultNew,
+    TaskResponse,
+)
+
+from gateway.schemas.generate import (
+    RenderRequest,
+    RenderResponse,
+    ShotDefaults,
+    ShotParam,
+    VideoParam,
+    TTSParam,
+    GenerateParameters,
+    GeneratePayload,
+)
+
+from gateway.schemas.project import ShotSchema
+
+# Import from services (incremental migration)
+from gateway.services.orchestrator import (
+    default_parameters as _default_parameters,
+    default_result as _default_result,
+    deep_merge_dict as _deep_merge_dict,
+    normalize_parameters as _normalize_parameters,
+    normalize_result as _normalize_result,
+)
+
+# Import shared state from store module
+from gateway.store.memory import tasks, projects, project_shots, progress_subs
+
 # Downstream service endpoints (can be overridden via env)
 LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:8001/storyboard")
 TXT2IMG_URL = os.getenv("TXT2IMG_URL", "http://127.0.0.1:8002/generate")
@@ -37,44 +86,9 @@ TMP_DIR = FINAL_DIR / "tmp"
 CLIPS_DIR = Path(os.getenv("CLIPS_DIR", "data/clips"))
 STORYBOARD_DIR = Path(os.getenv("STORYBOARD_DIR", "data/storyboard"))
 
-# Task status constants (align with system spec)
-TASK_STATUS_PENDING = "pending"
-TASK_STATUS_BLOCKED = "blocked"
-TASK_STATUS_PROCESSING = "processing"
-TASK_STATUS_FINISHED = "finished"
-TASK_STATUS_FAILED = "failed"
-TASK_STATUS_CANCELLED = "cancelled"
+# Backward compatibility aliases (these are defined in new modules now)
+# Remove these aliases once migration is complete and all code uses new imports
 
-# Task types
-TASK_TYPE_STORYBOARD = "generate_storyboard"
-TASK_TYPE_SHOT = "generate_shot"
-TASK_TYPE_AUDIO = "generate_audio"
-TASK_TYPE_VIDEO = "generate_video"
-
-# Very small in-memory task store. For production replace with Redis/DB.
-class TaskState(BaseModel):
-    id: str
-    project_id: Optional[str] = None
-    shot_id: Optional[str] = None
-    type: Optional[str] = None
-    status: str
-    progress: int
-    message: str = ""
-    parameters: Optional[Dict] = None
-    result: Optional[Dict] = None
-    error: Optional[str] = None
-    estimatedDuration: int = 0
-    startedAt: Optional[str] = None
-    finishedAt: Optional[str] = None
-    createdAt: Optional[str] = None
-    updatedAt: Optional[str] = None
-
-
-tasks: Dict[str, TaskState] = {}
-progress_subs: Dict[str, List[asyncio.Queue]] = defaultdict(list)
-# Very small in-memory project/shot store to satisfy spec endpoints
-projects: Dict[str, Dict] = {}
-project_shots: Dict[str, Dict[str, Dict]] = defaultdict(dict)
 
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -464,11 +478,15 @@ class TaskResponse(BaseModel):
     result: Optional[Dict] = None
     error: Optional[str] = None
 
-
-app = FastAPI(title="StoryToVideo Gateway", version="0.1.0")
+app = FastAPI(title="StoryToVideo Gateway", version="0.2.0")
 STATIC_ROOT = Path(os.getenv("STATIC_ROOT", "data")).resolve()
 STATIC_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/files", StaticFiles(directory=STATIC_ROOT), name="files")
+
+# Note: Routes below will be gradually migrated to gateway.routers.* modules
+# To complete migration, uncomment the following and remove duplicate routes:
+# from gateway.routers import health as health_router
+# app.include_router(health_router.router)
 
 
 @app.get("/health")

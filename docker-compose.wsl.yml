@@ -1,0 +1,219 @@
+version: "3.8"
+
+# StoryToVideo Full Containerization for Windows WSL2 + GPU
+# ============================================
+# FIXES APPLIED:
+# - Path consistency: All services use /data as STATIC_ROOT
+# - Port conflict: Model uses internal port only (not exposed to host)
+# - OLLAMA_HOST: Explicitly configured for model container
+# - GPU: Both ollama and model have GPU access
+# ============================================
+
+services:
+  # ============================================
+  # AI Layer (GPU Accelerated)
+  # ============================================
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: storytovideo-ollama
+    # Internal only - accessed via container network
+    expose:
+      - "11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  model:
+    build: ./model
+    container_name: storytovideo-model
+    # INTERNAL PORT ONLY - No host mapping to avoid conflict with gateway
+    expose:
+      - "8000"
+    environment:
+      # Ollama connection (container network)
+      - OLLAMA_HOST=http://ollama:11434
+      # ALL PATHS USE /data as root for consistency with Gateway STATIC_ROOT
+      - OUTPUT_DIR=/data/frames
+      - CLIPS_DIR=/data/clips
+      - AUDIO_DIR=/data/audio
+      - STORYBOARD_DIR=/data/storyboard
+      - FINAL_DIR=/data/final
+      # Lightweight defaults for fast generation
+      - SD_IMG_WIDTH=512
+      - SD_IMG_HEIGHT=288
+      - SD_IMG_STEPS=4
+      - SVD_STEPS=4
+      - SVD_MAX_FRAMES=8
+      - IMG2VID_MAX_FRAMES=8
+      # CUDA memory optimization
+      - TORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+    volumes:
+      - data_shared:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  # ============================================
+  # Application Layer
+  # ============================================
+
+  gateway:
+    build: ./gateway
+    container_name: storytovideo-gateway
+    # ONLY Gateway exposes 8000 to host (Model is internal only)
+    ports:
+      - "8000:8000"
+    environment:
+      # Model service endpoints (use container name, not localhost)
+      - LLM_URL=http://model:8000/llm/storyboard
+      - TXT2IMG_URL=http://model:8000/txt2img/generate
+      - IMG2VID_URL=http://model:8000/img2vid/generate
+      - TTS_URL=http://model:8000/tts/narration
+      # CRITICAL: STATIC_ROOT must match Model output paths
+      - STATIC_ROOT=/data
+      - FINAL_DIR=/data/final
+      - CLIPS_DIR=/data/clips
+      - STORYBOARD_DIR=/data/storyboard
+      - AUDIO_DIR=/data/audio
+      - FRAMES_DIR=/data/frames
+    volumes:
+      - data_shared:/data
+    depends_on:
+      - model
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  server:
+    build: ./server
+    container_name: storytovideo-server
+    ports:
+      - "8080:8080"
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+      - GATEWAY_URL=http://gateway:8000
+      - MYSQL_DSN=root:12345678@tcp(mysql:3306)/storydb2?charset=utf8mb4&parseTime=True&loc=Local
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - ./server/config/config.docker.yaml:/app/config/config.yaml:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/v1/api/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  # ============================================
+  # Storage Layer
+  # ============================================
+
+  mysql:
+    image: mysql:8.0
+    container_name: storytovideo-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 12345678
+      MYSQL_DATABASE: storydb2
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server/doc/sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-p12345678" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: storytovideo-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: storytovideo-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: story2video
+      MINIO_ROOT_PASSWORD: s2v_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - storytovideo-net
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  data_shared:
+    driver: local
+  mysql_data:
+    driver: local
+  minio_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  storytovideo-net:
+    driver: bridge

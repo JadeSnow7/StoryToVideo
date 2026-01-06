@@ -1,7 +1,0 @@
-server:
-  port: ":8001"
-mysql:
-  dsn: "user:password@tcp(127.0.0.1:3306)/storydb?charset=utf8mb4&parseTime=True&loc=Local"
-ai:
-  image_api: "http://ai-image-service/api/generate"
-  voice_api: "http://ai-voice-service/api/generate"

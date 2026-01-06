@@ -17,8 +17,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o server .
+# Build the binary from cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o StoryToVideoServer ./cmd/api
 
 # Run stage
 FROM alpine:3.19
@@ -32,10 +32,11 @@ RUN apk --no-cache add ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
 # Copy binary and config
-COPY --from=builder /app/server .
+COPY --from=builder /app/StoryToVideoServer .
 COPY --from=builder /app/config/config.yaml ./config/
 
 # Expose port
 EXPOSE 8080
 
-CMD ["./server"]
+CMD ["./StoryToVideoServer"]
+

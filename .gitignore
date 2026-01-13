@@ -25,6 +25,7 @@ __pycache__/
 # macOS
 .DS_Store
 *.DS_Store
+._*
 
 # Qt/C++ Build artifacts
 *.o
@@ -79,7 +80,12 @@ storytovideo*.zip
 *.pkg
 *.exe
 
+# Server binaries
+server/StoryToVideoServer
+server/server-linux
+
 # Server logs
+server/server.log
 server/log/
 
 # Server test outputs (generated media)

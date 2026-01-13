@@ -221,7 +221,12 @@ docker compose -f docker-compose.local.yml up -d
 echo "==> Starting Go Server..."
 cd "$ROOT_DIR/server"
 pkill -f StoryToVideoServer || true
-nohup ./StoryToVideoServer > server.log 2>&1 &
+if [ ! -x "./StoryToVideoServer" ]; then
+  echo "Building StoryToVideoServer..."
+  go build -o StoryToVideoServer ./cmd/api
+fi
+mkdir -p log
+nohup ./StoryToVideoServer > log/server.log 2>&1 &
 
 echo "==> Starting Qt Client..."
 cd "$ROOT_DIR/client/12.2StoryToVideo"

@@ -52,7 +52,9 @@ docker compose -f docker-compose.local.yml up -d
 ```bash
 cd /Users/huaodong/StoryToVideo/server
 pkill -f StoryToVideoServer || true
-./StoryToVideoServer > server.log 2>&1 &
+go build -o StoryToVideoServer ./cmd/api
+mkdir -p log
+./StoryToVideoServer > log/server.log 2>&1 &
 ```
 
 ### 配置说明
@@ -165,4 +167,3 @@ curl -X POST "http://127.0.0.1:8080/v1/api/projects/<PROJECT_ID>/video" \
 
 5) **视频预览 URL 仍为占位路径**
 - `StoryboardPage.qml` 中 `videoUrl` 为固定示例路径，未使用真实任务结果。
-

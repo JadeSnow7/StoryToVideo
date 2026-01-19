@@ -1,16 +1,38 @@
-"""FastAPI text-to-image service using Stable Diffusion Turbo (diffusers)."""
+"""FastAPI text-to-image service with cloud provider support.
+
+Supported providers (via IMAGE_PROVIDER env var):
+- local: SD Turbo (default, requires GPU)
+- horde: AI Horde (free, community-driven)
+- cloudflare: Cloudflare Workers AI (fast, generous free tier)
+"""
 
 import os
 import time
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import List, Optional
 
-import torch
-from diffusers import AutoPipelineForText2Image
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from model.services.utils import resolve_project_root
+
+# Conditional imports for local GPU mode
+try:
+    import torch
+    from diffusers import AutoPipelineForText2Image
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+
+# Cloud providers
+try:
+    from model.services.cloud_providers import get_image_provider, ImageProvider
+    CLOUD_PROVIDERS_AVAILABLE = True
+except ImportError:
+    CLOUD_PROVIDERS_AVAILABLE = False
+    ImageProvider = None
 
 router = APIRouter()
 
@@ -18,8 +40,9 @@ PROJECT_ROOT = resolve_project_root()
 MODEL_ID = os.getenv("MODEL_ID", "stabilityai/sd-turbo")
 DEVICE = os.getenv("DEVICE", "cuda")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/frames"))
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "local").lower()
 
-pipe = None  # lazy loaded
+pipe = None  # lazy loaded for local mode
 
 
 class ImageStyle(BaseModel):
@@ -51,9 +74,12 @@ def ensure_output_dir():
 
 
 def load_pipeline():
-    global pipe  # noqa: PLW0603
+    """Load local SD Turbo pipeline (only in local mode)."""
+    global pipe
     if pipe is not None:
         return
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("torch/diffusers not available. Use cloud provider or install dependencies.")
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     model_kwargs = {"torch_dtype": dtype}
     model_kwargs["variant"] = "fp16"
@@ -89,17 +115,72 @@ def save_image(image, scene_id: Optional[str], seed: int) -> str:
     return str(path)
 
 
+def save_image_bytes(image_bytes: bytes, scene_id: Optional[str], seed: int) -> str:
+    """Save image from bytes (for cloud providers)."""
+    ensure_output_dir()
+    base = scene_id or _slug(str(uuid.uuid4())[:8])
+    ts = int(time.time())
+    filename = f"{base}_{seed}_{ts}.png"
+    path = OUTPUT_DIR / filename
+    with open(path, "wb") as f:
+        f.write(image_bytes)
+    return str(path)
+
+
 async def _startup():
-    load_pipeline()
+    # Only load local pipeline if in local mode and torch is available
+    if IMAGE_PROVIDER == "local" and TORCH_AVAILABLE:
+        load_pipeline()
 
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "model": MODEL_ID, "device": DEVICE, "output_dir": str(OUTPUT_DIR)}
+    return {
+        "status": "ok",
+        "provider": IMAGE_PROVIDER,
+        "model": MODEL_ID if IMAGE_PROVIDER == "local" else "cloud",
+        "device": DEVICE,
+        "output_dir": str(OUTPUT_DIR),
+        "cloud_available": CLOUD_PROVIDERS_AVAILABLE,
+    }
 
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest):
+    # Use cloud provider if configured
+    if IMAGE_PROVIDER != "local" and CLOUD_PROVIDERS_AVAILABLE:
+        return await generate_cloud(req)
+    return await generate_local(req)
+
+
+async def generate_cloud(req: GenerateRequest) -> dict:
+    """Generate image using cloud provider (AI Horde/Cloudflare)."""
+    provider = get_image_provider()
+    if provider is None:
+        raise HTTPException(status_code=500, detail="Cloud image provider not configured")
+    
+    try:
+        image_bytes = await provider.generate(
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt,
+            width=req.style.width,
+            height=req.style.height,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Cloud generation failed: {exc}") from exc
+    
+    if not image_bytes:
+        raise HTTPException(status_code=500, detail="No image generated")
+    
+    seed = req.seed if req.seed is not None else int(time.time())
+    path = save_image_bytes(image_bytes, req.scene_id or "s1", seed)
+    return {"images": [GeneratedItem(path=path, seed=seed)]}
+
+
+async def generate_local(req: GenerateRequest) -> dict:
+    """Generate image using local SD Turbo."""
+    if not TORCH_AVAILABLE:
+        raise HTTPException(status_code=500, detail="torch/diffusers not available")
     if pipe is None:
         load_pipeline()
     gen = None
@@ -118,7 +199,7 @@ async def generate(req: GenerateRequest):
             guidance_scale=req.style.guidance_scale,
             generator=gen,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Generation failed: {exc}") from exc
     images = result.images if hasattr(result, "images") else []
     if not images:

@@ -30,23 +30,23 @@
 - `model/services/`：LLM/TXT2IMG/IMG2VID/TTS FastAPI 服务；`model/scripts/` 提供启动与编排脚本。
 - `data/`：默认输出；实际可挂载到持久化卷或对象存储挂载点。
 - `scripts/`：启动/测试/下载模型脚本。
-- `docker/`：可选 Compose 或单服务 Dockerfile。
+- `docker-compose.yml`：单机 Docker 编排（推荐的统一部署方式）。
 
 ## 开发与联调目标
 - 打通 `/storyboard` → `/frames` → `/clips` → `/narration` → `/render` 的最小可用链路。
 - 建立异步任务与状态查询；初期可用内存/文件表，后续换 Redis/Celery。
 - 提供示例请求 JSON 与返回路径约定，确保输出可追踪与复现。
-- 通过 FRP 暴露网关（或全链路）到外部测试入口。
+- 推荐使用 `docker-compose.yml` 单机部署，保证环境一致性。
 
 ## 依赖与要求（简表）
 - OS：Linux x86_64；Python 3.10/3.11。
 - GPU：建议 >=24GB 显存（SD Turbo + SVD 更稳）；可多卡分配（SD/SVD 分卡，LLM/TTS 共享）。
 - CUDA/驱动：CUDA 12.x，PyTorch 2.1+；建议启用 xformers/flash-attn（可选）。
-- 工具：ffmpeg、Ollama、FRP（frpc）、uvicorn/FastAPI。
+- 工具：ffmpeg、Ollama、uvicorn/FastAPI。
 
 ## 参考执行顺序（手动验证）
 1) 启动 Ollama 并拉取 Qwen2.5-0.5B；启动 `llm-service`。
 2) 启动 `txt2img-service`（SD Turbo）和 `img2vid-service`（SVD Img2Vid）。
 3) 启动 `tts-service`（CosyVoice-mini）。
 4) 启动网关 `gateway`，调用 `/render` 做 1~2 场景小样例验证。
-5) 配置 `frpc` 将网关暴露到公网测试。
+5) 使用 `docker-compose.yml` 跑全栈并通过 `/health` 做联通性检查。

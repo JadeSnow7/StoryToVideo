@@ -200,4 +200,4 @@ UI 只关心状态变化，不直接处理后台任务。对每个任务展示 `
 2. **TTS 参数不生效**：当前 TTS 接口忽略请求体，使用默认参数
 3. **Task 状态值**：后端同时使用 `finished` 和 `success` 表示完成，iOS 需兼容
 
-详见 [implementation_plan.md](file:///Users/huaodong/.gemini/antigravity/brain/f089f9b1-2879-465b-92bc-77ffd84068fc/implementation_plan.md) 中的完整分析。
+详见实现计划（待补充）。

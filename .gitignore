@@ -1,8 +1,10 @@
 # Runtime artifacts
 data/
 logs/
+.env
 CosyVoice
 pretrained_models
+svd_model/
 
 # Model caches / checkpoints
 .cache/
@@ -29,6 +31,7 @@ __pycache__/
 
 # Qt/C++ Build artifacts
 *.o
+*.o.tmp
 *.obj
 *.a
 *.lib
@@ -74,6 +77,7 @@ client/*/.xcode/
 client/*/Release/
 client/*/StoryToVideoGenerator.app/
 client/*/*.dmg
+client/*/client.log
 storytovideo.app/
 storytovideo*.zip
 *.dmg

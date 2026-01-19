@@ -1,120 +1,43 @@
-# 部署与启动指南（本地/内网环境）
+# 部署与启动指南（单机 Docker）
 
-## 环境要求
-- OS：Linux x86_64。
-- Python：3.10/3.11。
-- CUDA：12.x；显卡建议 >=24GB 显存，SD Turbo + SVD 更稳。
-- 依赖工具：git、ffmpeg、Ollama、FRP（frpc）、uvicorn/FastAPI、pip/uv/poetry。
-- 可选性能优化：`xformers`、`flash-attn`。
+## 前置条件
+- OS：Linux x86_64
+- Docker + `docker compose`
+- NVIDIA Driver + NVIDIA Container Toolkit
+- 宿主机 Ollama（默认端口 `11434`）
 
-## 目录布局（示例）
-```
-workspace/
-  docs/
-  gateway/
-  model/
-    main.py
-    services/
-    scripts/
-  data/
-    storyboards/ frames/ clips/ audio/ final/
-  client/
-  pretrained_models/
-```
-
-## 依赖安装（示例命令）
+## 一键启动（推荐）
 ```bash
-# 1) Python 环境
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-# 安装通用依赖（待补充 requirements.txt）
-pip install fastapi uvicorn[standard] pydantic[dotenv] pillow tqdm
-pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
-pip install diffusers transformers accelerate safetensors xformers
-pip install soundfile ffmpeg-python
-```
-
-## 模型节点启动（聚合模式）
-```bash
-cd StoryToVideo
-MODEL_ROOT="$PWD" uvicorn model.main:app --host 0.0.0.0 --port 8000
-# 关键路由：
-#   POST /llm/storyboard
-#   POST /txt2img/generate
-#   POST /img2vid/generate
-#   POST /tts/narration
-```
-
-## 模型下载与启动
-### LLM：Qwen2.5-0.5B @ Ollama
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:0.5b
-# 启动 ollama 服务（默认 11434）
+# 0) 宿主机启动 Ollama 并拉取模型
 ollama serve
-# llm-service FastAPI 在 model/services/llm.py，可直接 uvicorn model.services.llm:app
-```
+ollama pull qwen2.5:0.5b
 
-### 文生图：Stable Diffusion Turbo @ diffusers
-```bash
-# 单服务调试：端口 8002
+# 1) 启动全栈
 cd StoryToVideo
-uvicorn model.services.txt2img:app --host 0.0.0.0 --port 8002
-# 或使用 ./model/scripts/run_txt2img.sh
+cp .env.cloud.example .env
+./deploy-server.sh up
 ```
 
-### 图生视频：Stable-Video-Diffusion-Img2Vid @ diffusers
+服务入口：
+- Gateway：`http://127.0.0.1:8000`
+- Go Server：`http://127.0.0.1:8080`
+- MinIO Console：`http://127.0.0.1:9001`
+
+## 配置说明
+- 唯一编排文件：`docker-compose.yml`
+- 变量覆盖：复制 `.env.cloud.example` → `.env` 并按需修改
+- SVD 开关：`SVD_ENABLED=0` 关闭图生视频；网关会自动降级为静态视频片段并继续流程
+- 智能降级：网关可在 img2vid 失败后对后续场景直接走 fallback（见 `.env` 中 `IMG2VID_*` 变量）
+
+## 健康检查
 ```bash
-cd StoryToVideo
-uvicorn model.services.img2vid:app --host 0.0.0.0 --port 8003
-# 或使用 ./model/scripts/run_img2vid.sh
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8080/v1/api/health
 ```
 
-### TTS：CosyVoice-mini
+## 单服务调试（可选）
 ```bash
-# 需准备 CosyVoice 代码与权重，MODEL_ID 默认为 pretrained_models/CosyVoice2-0.5B/...
-cd StoryToVideo
-uvicorn model.services.tts:app --host 0.0.0.0 --port 8004
-# 或使用 ./model/scripts/run_tts.sh
+docker compose up -d --build model
+docker compose up -d --build gateway
+docker compose up -d --build server
 ```
-
-## 网关与编排
-```bash
-# 启动 FastAPI 网关
-uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
-```
-- 网关负责：路由转发、任务状态、序列化请求、ffmpeg 合成。
-- ffmpeg 合成示例（编排层执行）：
-```bash
-ffmpeg -y -i clips_list.txt -filter_complex "[0:v]concat=n=6:v=1:a=0" -an /data/final/final.mp4
-# 叠加旁白
-ffmpeg -y -i /data/final/final.mp4 -i /data/audio/merged.wav -shortest -c:v copy -c:a aac /data/final/final_mix.mp4
-```
-
-## FRP 对接（暴露网关）
-1) 准备 `frpc.ini`：
-```
-[common]
-server_addr = <frps_host>
-server_port = 7000
-token = <token>
-
-[story-gateway]
-type = tcp
-local_ip = 127.0.0.1
-local_port = 8000
-remote_port = 18000
-```
-2) 启动：`frpc -c frpc.ini`
-3) 对外访问：`http://<frps_host>:18000/` → 网关 API。
-
-## Docker/容器（可选）
-- 为每个服务提供单独 Dockerfile；使用 Compose 编排 GPU（`runtime: nvidia` 或 `--gpus all`）。
-- Compose 关键点：挂载 `./data`、暴露网关 8000、内部网络互联、指定 `NVIDIA_VISIBLE_DEVICES`。
-
-## 首次联调步骤（建议）
-1) 单测各服务：llm-service 出分镜；txt2img 出 1~2 张图；img2vid 将图转 1 秒短片；tts 输出 1 条音频。
-2) 网关串联 `/render`，跑 1~2 场景小样本，确认状态流转与路径正确。
-3) 配置 FRP 暴露网关，使用 curl 或前端脚本远程调用验证。
-4) 根据显存与速度调参：降低分辨率/步数/帧率，或改为多卡分配。

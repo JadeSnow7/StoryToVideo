@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/main.qml</file>
+        <file>qml/AssetsPage.qml</file>
+        <file>qml/CreatePage.qml</file>
+        <file>qml/StoryboardPage.qml</file>
+        <file>qml/ShotDetailPage.qml</file>
+        <file>qml/PreviewPage.qml</file>
+        <file>qml/Assetsshow.qml</file>
+    </qresource>
+</RCC>

@@ -1,4 +1,11 @@
-"""FastAPI LLM storyboard service backed by Ollama (Qwen2.5-0.5B by default)."""
+"""FastAPI LLM storyboard service with cloud provider support.
+
+Supported providers (via LLM_PROVIDER env var):
+- ollama: Local Ollama (default)
+- groq: Groq Cloud (free tier)
+- deepseek: DeepSeek API
+- openrouter: OpenRouter (multi-model)
+"""
 
 import json
 import os
@@ -9,10 +16,18 @@ import httpx
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+try:
+    from model.services.cloud_providers import get_llm_provider, LLMProvider
+    CLOUD_PROVIDERS_AVAILABLE = True
+except ImportError:
+    CLOUD_PROVIDERS_AVAILABLE = False
+    LLMProvider = None
+
 router = APIRouter()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:0.5b")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
 
 
 class StoryboardRequest(BaseModel):
@@ -495,12 +510,99 @@ async def call_ollama(req: StoryboardRequest) -> List[StoryboardItem]:
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "model": LLM_MODEL, "ollama": OLLAMA_HOST}
+    return {
+        "status": "ok",
+        "provider": LLM_PROVIDER,
+        "model": LLM_MODEL,
+        "ollama": OLLAMA_HOST,
+        "cloud_available": CLOUD_PROVIDERS_AVAILABLE,
+    }
+
+
+async def call_cloud_llm(req: StoryboardRequest) -> List[StoryboardItem]:
+    """Call cloud LLM provider (Groq/DeepSeek/OpenRouter)."""
+    if not CLOUD_PROVIDERS_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Cloud providers not available")
+    
+    provider = get_llm_provider()
+    if provider is None:
+        raise HTTPException(status_code=500, detail="Cloud provider not configured")
+    
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_user_prompt(req)},
+    ]
+    
+    try:
+        response = await provider.chat_completion(
+            messages=messages,
+            temperature=_env_float("LLM_TEMPERATURE", 0.3),
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Cloud LLM error: {exc}") from exc
+    
+    # Parse response (OpenAI-compatible format)
+    content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not content:
+        raise HTTPException(status_code=502, detail="Empty response from cloud LLM")
+    
+    return _parse_llm_response(content, req)
+
+
+def _parse_llm_response(content: str, req: StoryboardRequest) -> List[StoryboardItem]:
+    """Parse LLM response content into storyboard items."""
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Invalid JSON returned by LLM")
+    storyboard = parsed.get("storyboard")
+    if not storyboard or not isinstance(storyboard, list):
+        raise HTTPException(status_code=502, detail="LLM output missing storyboard list")
+    sanitized: List[StoryboardItem] = []
+    for idx, raw in enumerate(storyboard, start=1):
+        if isinstance(raw, dict):
+            item = raw
+        elif isinstance(raw, list) and raw and isinstance(raw[0], dict):
+            item = raw[0]
+        else:
+            item = {}
+        normalized = {
+            "scene_id": item.get("scene_id") or f"s{idx}",
+            "title": item.get("title") or f"Scene {idx}",
+            "prompt": _normalize_prompt(
+                (item.get("prompt") or item.get("description") or "").strip()
+            ),
+            "narration": (item.get("narration") or item.get("voiceover") or "").strip(),
+            "bgm": item.get("bgm"),
+        }
+        if not _is_keyword_prompt(normalized["prompt"]):
+            normalized["prompt"] = _generate_fallback_prompt(
+                normalized["title"],
+                normalized["narration"],
+                idx,
+                req.style,
+                normalized["prompt"],
+            )
+        else:
+            normalized["prompt"] = _apply_style_keywords(normalized["prompt"], req.style)
+        normalized["prompt"] = _apply_subject_hints(
+            normalized["prompt"], normalized["title"], normalized["narration"]
+        )
+        try:
+            sanitized.append(StoryboardItem(**normalized))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"LLM output schema error: {exc}") from exc
+    return sanitized
 
 
 @router.post("/storyboard", response_model=StoryboardResponse)
 async def generate_storyboard(req: StoryboardRequest):
-    items = await call_ollama(req)
+    # Use cloud provider if configured, fallback to Ollama
+    if LLM_PROVIDER != "ollama" and CLOUD_PROVIDERS_AVAILABLE:
+        items = await call_cloud_llm(req)
+    else:
+        items = await call_ollama(req)
     for idx, item in enumerate(items, start=1):
         if not item.scene_id:
             item.scene_id = f"s{idx}"

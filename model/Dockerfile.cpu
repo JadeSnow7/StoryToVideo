@@ -1,0 +1,30 @@
+# CPU-only Python image for cloud model serving
+# For servers without GPU - uses cloud providers for LLM/Image/TTS
+FROM python:3.10-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MODEL_ROOT=/workspace
+
+WORKDIR /workspace
+
+# System deps
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    git curl ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch CPU-only version
+RUN pip install --upgrade pip \
+    && pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements.txt ./model/requirements.txt
+RUN pip install -r model/requirements.txt
+
+COPY . ./model
+ENV PYTHONPATH="/workspace"
+
+EXPOSE 8000
+
+CMD ["uvicorn", "model.main:app", "--host", "0.0.0.0", "--port", "8000"]

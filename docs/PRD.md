@@ -28,7 +28,7 @@
 ## 3. 非功能需求 / Non-functional
 - 性能：UI 60fps；所有网络异步，禁止阻塞 UI 线程。 / Performance: 60fps UI; async network, no UI blocking.
 - 持久化：SQLite + 本地文件缓存，离线可读已生成内容。 / Persistence: SQLite + file cache; offline readable.
-- 部署：PC 客户端 + 云服务端（业务逻辑）+ 本地算力节点（模型，FRP 穿透）。 / Deployment: PC client + cloud server + local model node via FRP.
+- 部署：PC 客户端 + 单机服务（Go Server/Gateway/Model，Docker Compose）。 / Deployment: PC client + single-machine backend via Docker Compose.
 
 ## 4. 设计规范 / Design system
 - 分辨率：基准 1280x720，自适应 1920x1080。 / Resolution: base 1280x720, adaptive to 1920x1080.
@@ -56,7 +56,7 @@ graph LR
 
 ## 7. 技术架构摘要 / Tech overview
 - 客户端：Qt 6.5+ QML + C++；QNetwork (REST/WS)；ViewModel + SQLite；FFmpeg+OpenGL 播放/合成。 / Client: Qt 6.5+ QML/C++; QNetwork REST/WS; ViewModel+SQLite; FFmpeg+OpenGL.
-- 服务端：推荐 Django/DRF + Nginx/Gunicorn；PostgreSQL；任务队列；OSS/TOS；FRP 连接本地模型。 / Server: Django/DRF + Nginx/Gunicorn; PostgreSQL; task queue; OSS/TOS; FRP to local models.
+- 服务端：Go/Gin + MySQL + Redis(Asynq) + MinIO；FastAPI 网关负责编排与合成。 / Server: Go/Gin + MySQL + Redis(Asynq) + MinIO; FastAPI gateway for orchestration.
 - 模型节点：FastAPI 封装；Qwen2.5-0.5B（分镜/Narration）；SD Turbo（文生图）；SVD Img2Vid（可选）；CosyVoice-mini（TTS）。 / Model node: FastAPI; Qwen2.5-0.5B; SD Turbo; SVD Img2Vid optional; CosyVoice-mini TTS.
 
 ## 8. 数据与 API 草案 / Data & API draft

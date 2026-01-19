@@ -1,101 +1,41 @@
-# StoryToVideo 三端启动指南与 API 文档
+# StoryToVideo 启动指南与 API 快速参考
 
-## 系统架构
-```
-┌─────────────┐      ┌──────────────┐      ┌─────────────────────────────┐
-│  Qt Client  │ ───▶ │  Go Server   │ ───▶ │        Gateway (Python)     │
-│  (macOS)    │      │  :8080       │      │        :8000                │
-│  本地运行    │      │  本地 Docker  │      │  ┌─────────────────────────┐│
-└─────────────┘      └──────────────┘      │  │ Model Services (Remote) ││
-                                           │  │ ├─ LLM      :8001       ││
-                                           │  │ ├─ txt2img  :8002       ││
-                                           │  │ ├─ img2vid  :8003       ││
-                                           │  │ └─ TTS      :8004       ││
-                                           │  └─────────────────────────┘│
-                                           └─────────────────────────────┘
-```
-
-## 1. Model Services（远程 172.23.197.11）
-
-### 启动
+## 推荐启动方式（单机 Docker）
 ```bash
-ssh -p 2222 stv@172.23.197.11
-cd ~/workspace/StoryToVideo
-conda activate stroy2video
-tmux kill-server || true
-./start.sh
+# 0) 宿主机启动 Ollama（并拉取模型）
+ollama serve
+ollama pull qwen2.5:0.5b
+
+# 1) 启动全栈
+cd StoryToVideo
+cp .env.cloud.example .env
+./deploy-server.sh up
 ```
 
-### 服务列表
-- LLM：8001（故事 → 分镜）
-- txt2img：8002（Prompt → 图片）
-- img2vid：8003（图片 → 视频）
-- TTS：8004（文本 → 语音）
-- Gateway：8000（统一入口与任务编排）
+## 服务列表（默认端口）
+- Go Server：`8080`（对外业务 API）
+- Gateway：`8000`（编排入口 + `/files/...` 静态资源）
+- MinIO：`9000`（S3 API），Console：`9001`
+- MySQL：`3306`
+- Redis：`6379`
 
-### 健康检查
+## 健康检查
 ```bash
-curl -s http://172.23.197.11:8000/health
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8080/v1/api/health
 ```
-
-注意：外网可能无法直连 8002/8003/8004，统一通过 Gateway 调用。
-
-## 2. Go Server（本地 macOS）
-
-### 启动依赖（MySQL/Redis/MinIO）
-```bash
-cd /Users/huaodong/StoryToVideo
-docker compose -f docker-compose.local.yml up -d
-```
-
-### 启动服务
-```bash
-cd /Users/huaodong/StoryToVideo/server
-pkill -f StoryToVideoServer || true
-go build -o StoryToVideoServer ./cmd/api
-mkdir -p log
-./StoryToVideoServer > log/server.log 2>&1 &
-```
-
-### 配置说明
-配置文件：`server/config/config.yaml`
-- `worker.addr`: 指向远程 Gateway（默认 `http://172.23.197.11:8000`）
-- `minio`: 本地 MinIO（默认 `127.0.0.1:9000`）
-- `mysql`/`redis`: 本地 Docker 容器
-
-服务没有独立 health 端点；可用创建项目接口验证连通性。
-
-## 3. Qt Client（本地 macOS）
-
-### 编译
-```bash
-cd /Users/huaodong/StoryToVideo/client/12.2StoryToVideo
-qmake
-make -j8
-```
-
-### 运行
-```bash
-./StoryToVideoGenerator.app/Contents/MacOS/StoryToVideoGenerator
-```
-
-### 关键配置
-客户端有多处 API Base URL，需要保持一致：
-- `client/12.2StoryToVideo/NetworkManager.h`（项目与任务 API）
-- `client/12.2StoryToVideo/ViewModel.cpp`（图片/视频 URL 拼接）
 
 ## API 快速参考
 
-### Gateway（172.23.197.11:8000）
-
+### Gateway（127.0.0.1:8000）
 健康检查：
 ```bash
-curl -s http://172.23.197.11:8000/health
+curl -fsS http://127.0.0.1:8000/health
 ```
 
-创建任务（/v1/generate）：
+创建任务（`/v1/generate`）：
 ```bash
-curl -X POST http://172.23.197.11:8000/v1/generate \
+curl -X POST http://127.0.0.1:8000/v1/generate \
   -H "Content-Type: application/json" \
   -d '{
     "type": "generate_shot",
@@ -111,7 +51,7 @@ curl -X POST http://172.23.197.11:8000/v1/generate \
 
 查询任务状态：
 ```bash
-curl http://172.23.197.11:8000/v1/jobs/<JOB_ID>
+curl http://127.0.0.1:8000/v1/jobs/<JOB_ID>
 ```
 
 返回结果中的 `result.resource_url` 指向 `/files/...` 静态资源。

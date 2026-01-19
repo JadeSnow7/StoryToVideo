@@ -39,21 +39,18 @@ cd StoryToVideo
 # run_pipeline.py 支持 --base-url/LLM_URL 等参数覆盖默认的 http://localhost:8000
 ```
 
-## Docker Compose（本地 GPU 节点）
+## Docker Compose（单机部署）
 ```bash
-cd StoryToVideo/model
-docker compose -f docker-compose.gpu.yml build
-docker compose -f docker-compose.gpu.yml up -d
+cd StoryToVideo
+docker compose up -d --build model
 ```
 - 模型服务：`http://localhost:8000`（聚合路由如 `/llm/storyboard`）。
-- Ollama：`http://localhost:11434`，进入容器后 `ollama pull qwen2.5:0.5b`。
-- 挂载：`../data -> /workspace/data`、`../pretrained_models -> /workspace/pretrained_models`、`../CosyVoice -> /workspace/CosyVoice`、`./weights -> /models`。`MODEL_ROOT` 默认为 `/workspace`。
+- Ollama：宿主机 `http://localhost:11434`（默认通过 `OLLAMA_HOST=http://host.docker.internal:11434` 供容器访问）。
 
 ## 环境与依赖
 - 需要 CUDA 12.x GPU；`requirements.txt` 覆盖 FastAPI + diffusers + torch 等。
 - CosyVoice2 需要预置 `pretrained_models/CosyVoice2-0.5B/iic/CosyVoice2-0___5B` 与 `CosyVoice` 代码（compose 已挂载目录，可通过 `MODEL_ID` 自定义路径）。
-- 文生图/图生视频默认输出到 `data/frames`、`data/clips`，TTS 输出 `data/audio`，最终视频 `data/final`。
+- 文生图/图生视频默认输出到容器内 `/data/frames`、`/data/clips`，TTS 输出 `/data/audio`，最终视频 `/data/final`（由 `docker-compose.yml` 统一挂载）。
 
 ## 典型集成
-- 本地或远端模型节点跑在 8000，通过 FRP 将 8000 暴露给网关/客户端。
-- 网关（`gateway/`）或脚本通过 HTTP 调用；如需继续使用分端口模式，设置 `LLM_URL/TXT2IMG_URL/IMG2VID_URL/TTS_URL` 指向 8001~8004 旧路径。
+- 单机部署下，网关与服务端通过 Docker 网络访问 `model:8000`；模型侧通过 `OLLAMA_HOST` 调用宿主机 Ollama。

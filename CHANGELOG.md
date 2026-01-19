@@ -34,7 +34,6 @@ StoryToVideo v1.0.0 is the first stable release of a comprehensive system that t
 
 #### Build & Deployment
 - Dockerized model services (GPU-ready)
-- FRP (Fast Reverse Proxy) for network tunneling
 - Unified deployment configuration
 - Cross-platform build scripts
 
@@ -118,13 +117,12 @@ bash deploy.sh
 
 #### Build & Deploy Backend
 ```bash
-# Using Docker
-docker-compose -f docker-compose.local.yml up
+# Using Docker (single-machine)
+cp .env.cloud.example .env
+./deploy-server.sh up
 
-# Or Python directly
-cd model
-pip install -r requirements.txt
-python main.py
+# Or (without script)
+docker compose -f docker-compose.yml up -d --build
 ```
 
 ### 🐛 Known Issues
@@ -134,7 +132,7 @@ python main.py
 ### 📋 Development Team
 - Frontend: Qt/QML development
 - Backend: Python (FastAPI, PyTorch)
-- DevOps: Docker, FRP deployment
+- DevOps: Docker deployment
 
 ### 📄 License
 See LICENSE file for details.

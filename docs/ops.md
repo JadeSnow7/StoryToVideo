@@ -18,7 +18,7 @@
 - 颜色/风格不一致：在分镜 prompt 中加入统一风格标签；将 seed 固定。
 - 音画不同步：ffmpeg 合成前统一 fps 和音频采样率；合成时使用 `-shortest`。
 - 文件路径冲突：使用 task_id/uuid 命名；避免覆盖旧文件。
-- FRP 无法访问：检查 token/端口、防火墙；确认 frpc 与网关在同一主机网络。
+- 图生视频不稳定：调低帧数/步数，或设置 `SVD_ENABLED=0` 走静态视频降级；检查 `IMG2VID_TIMEOUT/IMG2VID_FAIL_FAST` 等参数。
 
 ## 安全与鉴权
 - 内网可裸跑；公网暴露建议：HTTPS 反向代理 + 简单 API Key（Header `X-API-Key`），或 JWT。

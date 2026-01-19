@@ -1,5 +1,13 @@
-"""FastAPI image-to-video service using Stable-Video-Diffusion-Img2Vid (diffusers)."""
+"""FastAPI image-to-video service using Stable-Video-Diffusion-Img2Vid (diffusers).
 
+Optimized for lower resource consumption:
+- Reduced default frames: 10 (was 14)
+- Reduced inference steps: 6 (was 8)
+- Aggressive memory optimization enabled by default
+- CPU offload enabled by default for 6-8GB cards
+"""
+
+import gc
 import os
 import time
 import uuid
@@ -19,12 +27,15 @@ router = APIRouter()
 PROJECT_ROOT = resolve_project_root()
 MODEL_ID = os.getenv("MODEL_ID", "stabilityai/stable-video-diffusion-img2vid")
 DEVICE = os.getenv("DEVICE", "cuda")
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/clips"))
-MAX_FRAMES = max(int(os.getenv("SVD_MAX_FRAMES", "12")), 8)
-DEFAULT_STEPS = max(int(os.getenv("SVD_STEPS", "8")), 4)
-# Clamp the longer side of the input frame to keep VRAM under control (divisible by 8 for UNet)
-MAX_SIDE = max(int(os.getenv("SVD_MAX_SIDE", "512")), 256)
+OUTPUT_DIR = Path(os.getenv("CLIPS_DIR", os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/clips")))
+
+# Optimized defaults for lower VRAM consumption
+MAX_FRAMES = max(int(os.getenv("SVD_MAX_FRAMES", "10")), 6)  # Reduced from 12
+DEFAULT_STEPS = max(int(os.getenv("SVD_STEPS", "6")), 2)  # Reduced from 8
+MAX_SIDE = max(int(os.getenv("SVD_MAX_SIDE", "448")), 256)  # Reduced from 512
 CPU_OFFLOAD = os.getenv("SVD_CPU_OFFLOAD", "1") != "0"
+LOW_VRAM_MODE = os.getenv("SVD_LOW_VRAM", "1") != "0"  # New: extra aggressive for 6GB cards
+SVD_ENABLED = os.getenv("SVD_ENABLED", "1") != "0"  # Set to 0 to disable SVD completely
 
 pipe = None  # lazy loaded
 
@@ -52,6 +63,9 @@ def ensure_output_dir():
 
 def load_pipeline():
     global pipe  # noqa: PLW0603
+    if not SVD_ENABLED:
+        print("[img2vid] SVD disabled by env var, skipping pipeline load")
+        return
     if pipe is not None:
         return
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -140,6 +154,8 @@ async def health():
 @router.post("/generate", response_model=GenerateResponse, name="img2vid_generate")
 @router.post("/img2vid", response_model=GenerateResponse, include_in_schema=False)
 async def generate(req: GenerateRequest):
+    if not SVD_ENABLED:
+        raise HTTPException(status_code=503, detail="SVD video generation is disabled on this server")
     if pipe is None:
         load_pipeline()
     # Clamp heavy params to keep latency predictable

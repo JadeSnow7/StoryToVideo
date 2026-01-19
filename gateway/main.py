@@ -862,28 +862,46 @@ async def _orchestrate(task_id: str, task_type: str, ctx: Dict) -> None:
             # 3) IMG2VID
             clips: List[Dict] = []
             img2vid_max_frames = max(int(os.getenv("IMG2VID_MAX_FRAMES", "48")), 8)
+            img2vid_fail_fast = os.getenv("IMG2VID_FAIL_FAST", "1") != "0"
+            img2vid_disable_after_failures = max(int(os.getenv("IMG2VID_DISABLE_AFTER_FAILURES", "1")), 1)
+            img2vid_validate_output = os.getenv("IMG2VID_VALIDATE_OUTPUT", "1") != "0"
+            img2vid_min_bytes = max(int(os.getenv("IMG2VID_MIN_BYTES", "4096")), 0)
+            img2vid_failures = 0
+            img2vid_disabled_reason: Optional[str] = None
             for idx, scene in enumerate(scene_assets):
                 frame_path = scene.get("image_path") or next((f["path"] for f in frames if f["scene_id"] == scene["scene_id"]), "")
                 frames_for_service = min(clip_frames, img2vid_max_frames)
-                payload_vid = {
-                    "frame": frame_path,
-                    "scene_id": scene["scene_id"],
-                    "fps": req.fps,
-                    "num_frames": frames_for_service,
-                }
-                try:
-                    vid_data = await _call_json_api(
-                        client,
-                        IMG2VID_URL,
-                        payload_vid,
-                        timeout=float(os.getenv("IMG2VID_TIMEOUT", "240")),
-                    )
-                    video = vid_data.get("video")
-                    if not video:
-                        raise RuntimeError(f"No video for scene {scene['scene_id']}")
-                except Exception:
-                    # Fallback: generate static video locally to keep pipeline moving.
+                if img2vid_disabled_reason:
                     video = str(_frame_to_video_fallback(frame_path, scene["scene_id"], req.fps, frames_for_service))
+                else:
+                    payload_vid = {
+                        "frame": frame_path,
+                        "scene_id": scene["scene_id"],
+                        "fps": req.fps,
+                        "num_frames": frames_for_service,
+                    }
+                    try:
+                        vid_data = await _call_json_api(
+                            client,
+                            IMG2VID_URL,
+                            payload_vid,
+                            timeout=float(os.getenv("IMG2VID_TIMEOUT", "240")),
+                        )
+                        video = vid_data.get("video")
+                        if not video:
+                            raise RuntimeError(f"No video for scene {scene['scene_id']}")
+                        if img2vid_validate_output and not str(video).startswith(("http://", "https://")):
+                            p = Path(str(video))
+                            if not p.exists():
+                                raise RuntimeError(f"img2vid returned missing video path: {video}")
+                            if img2vid_min_bytes and p.stat().st_size < img2vid_min_bytes:
+                                raise RuntimeError(f"img2vid returned too-small video ({p.stat().st_size} bytes): {video}")
+                    except Exception as exc:
+                        img2vid_failures += 1
+                        if img2vid_fail_fast or img2vid_failures >= img2vid_disable_after_failures:
+                            img2vid_disabled_reason = f"{type(exc).__name__}: {exc}"
+                            print(f"[gateway] img2vid disabled for task {task_id}: {img2vid_disabled_reason}")
+                        video = str(_frame_to_video_fallback(frame_path, scene["scene_id"], req.fps, frames_for_service))
                 clips.append({"scene_id": scene["scene_id"], "video": video, "order": scene["order"], "frames": frames_for_service})
                 scene_assets[idx]["video"] = video
                 scene_assets[idx]["frames"] = frames_for_service

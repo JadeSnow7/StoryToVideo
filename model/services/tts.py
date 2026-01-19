@@ -1,11 +1,17 @@
-"""FastAPI TTS service using local CosyVoice2 models."""
+"""FastAPI TTS service with cloud provider support.
+
+Supported providers (via TTS_PROVIDER env var):
+- local: CosyVoice2 (default, requires GPU)
+- edge: Microsoft Edge TTS (free, no API key)
+- elevenlabs: ElevenLabs (10k chars/month free)
+"""
 
 import os
 import sys
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -13,26 +19,45 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from model.services.utils import resolve_project_root
 
+# Cloud providers
+try:
+    from model.services.cloud_providers import get_tts_provider, TTSProvider
+    CLOUD_PROVIDERS_AVAILABLE = True
+except ImportError:
+    CLOUD_PROVIDERS_AVAILABLE = False
+    TTSProvider = None
+
 router = APIRouter()
 
 PROJECT_ROOT = resolve_project_root()
 COSYVOICE_ROOT = PROJECT_ROOT / "CosyVoice"
-if COSYVOICE_ROOT.exists() and str(COSYVOICE_ROOT) not in sys.path:
-    sys.path.insert(0, str(COSYVOICE_ROOT))
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "local").lower()
 
-from cosyvoice.cli.cosyvoice import CosyVoice2  # type: ignore  # noqa: E402
+# Only load CosyVoice for local mode
+if TTS_PROVIDER == "local":
+    if COSYVOICE_ROOT.exists() and str(COSYVOICE_ROOT) not in sys.path:
+        sys.path.insert(0, str(COSYVOICE_ROOT))
+    try:
+        from cosyvoice.cli.cosyvoice import CosyVoice2
+        COSYVOICE_AVAILABLE = True
+    except ImportError:
+        CosyVoice2 = None
+        COSYVOICE_AVAILABLE = False
+else:
+    CosyVoice2 = None
+    COSYVOICE_AVAILABLE = False
 
 MODEL_ID = os.getenv(
     "MODEL_ID",
     str(PROJECT_ROOT / "pretrained_models" / "CosyVoice2-0.5B" / "iic" / "CosyVoice2-0___5B"),
 )
 DEVICE = os.getenv("DEVICE", "cuda")
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/audio"))
+OUTPUT_DIR = Path(os.getenv("AUDIO_DIR", os.getenv("OUTPUT_DIR", PROJECT_ROOT / "data/audio")))
 ZERO_SHOT_AUDIO = PROJECT_ROOT / "CosyVoice" / "asset" / "zero_shot_prompt.wav"
 ZERO_SHOT_TEXT = "希望你以后能够做的比我还好呦。"
 ZERO_SHOT_ID = "zero_shot_demo"
 
-voice_model: Optional[CosyVoice2] = None
+voice_model = None
 default_speaker: Optional[str] = None
 available_speakers: List[str] = []
 
@@ -154,19 +179,35 @@ def save_audio(audio: np.ndarray, sample_rate: int, scene_id: str) -> str:
     return str(path)
 
 
+def save_audio_bytes(audio_bytes: bytes, scene_id: str, sample_rate: int) -> str:
+    """Save audio from bytes (for cloud providers)."""
+    ensure_output_dir()
+    base = _slug(scene_id) if scene_id else _slug(str(uuid.uuid4())[:8])
+    ts = int(time.time())
+    filename = f"{base}_{ts}.mp3"  # Cloud providers often return MP3
+    path = OUTPUT_DIR / filename
+    with open(path, "wb") as f:
+        f.write(audio_bytes)
+    return str(path)
+
+
 async def _startup():
-    load_voice_model()
+    # Only load local model if in local mode
+    if TTS_PROVIDER == "local" and COSYVOICE_AVAILABLE:
+        load_voice_model()
 
 
 @router.get("/health")
 async def health():
     return {
         "status": "ok",
-        "model": MODEL_ID,
+        "provider": TTS_PROVIDER,
+        "model": MODEL_ID if TTS_PROVIDER == "local" else "cloud",
         "device": DEVICE,
         "output_dir": str(OUTPUT_DIR),
         "default_speaker": default_speaker,
         "available_speakers": available_speakers,
+        "cloud_available": CLOUD_PROVIDERS_AVAILABLE,
     }
 
 
@@ -174,6 +215,44 @@ async def health():
 async def narration(req: NarrationRequest):
     if not req.lines:
         raise HTTPException(status_code=400, detail="lines is empty")
+    
+    # Use cloud provider if configured
+    if TTS_PROVIDER != "local" and CLOUD_PROVIDERS_AVAILABLE:
+        return await narration_cloud(req)
+    return await narration_local(req)
+
+
+async def narration_cloud(req: NarrationRequest) -> dict:
+    """Generate narration using cloud TTS (Edge TTS/ElevenLabs)."""
+    provider = get_tts_provider()
+    if provider is None:
+        raise HTTPException(status_code=500, detail="Cloud TTS provider not configured")
+    
+    outputs: List[AudioItem] = []
+    for line in req.lines:
+        try:
+            text = line.text or ""
+            if not text.strip():
+                # Generate silence for empty text
+                audio, sr = generate_silence(0.2)
+                path = save_audio(audio, sr, line.scene_id)
+            else:
+                audio_bytes, sr = await provider.synthesize(
+                    text=text,
+                    voice=req.speaker,
+                    speed=req.speed,
+                )
+                path = save_audio_bytes(audio_bytes, line.scene_id, sr)
+            outputs.append(AudioItem(scene_id=line.scene_id, audio=path, sample_rate=sr))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"TTS failed for {line.scene_id}: {exc}") from exc
+    return {"audios": outputs}
+
+
+async def narration_local(req: NarrationRequest) -> dict:
+    """Generate narration using local CosyVoice2."""
+    if not COSYVOICE_AVAILABLE:
+        raise HTTPException(status_code=500, detail="CosyVoice not available")
     if voice_model is None:
         load_voice_model()
     outputs: List[AudioItem] = []
@@ -186,7 +265,7 @@ async def narration(req: NarrationRequest):
                 audio, sr = synthesize(text, req.speaker, req.speed)
             path = save_audio(audio, sr, line.scene_id)
             outputs.append(AudioItem(scene_id=line.scene_id, audio=path, sample_rate=sr))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise HTTPException(status_code=500, detail=f"TTS failed for {line.scene_id}: {exc}") from exc
     return {"audios": outputs}
 
